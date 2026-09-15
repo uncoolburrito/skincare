@@ -331,32 +331,26 @@ function render(pulse = false) {
           </label>
           <p class="hint">This date drives the day-by-day guide above — every-other-night for the first 2 weeks, nightly from week 3. Set it to the day you actually started.</p>
 
-          <div class="settings-section-title">Cloud Sync (Supabase)</div>
-          <p class="hint">For real-time sync between two separate devices, create a free project at <a href="https://supabase.com" target="_blank" style="color: var(--ink); text-decoration: underline;">supabase.com</a>, run the SQL in <code>supabase_schema.sql</code>, and paste your credentials below:</p>
-          <label>Supabase Project URL
-            <input id="inSupabaseUrl" type="url" value="${credentials.url}" placeholder="https://xyzcompany.supabase.co">
-          </label>
-          <label>Supabase Anon Key
-            <input id="inSupabaseKey" type="password" value="${credentials.anonKey}" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
-          </label>
-
-          <div class="settings-section-title">Automated Reminders (CallMeBot Stretch Goal)</div>
-          <p class="hint">Optional: Send automatic WhatsApp nudges when time passes without logging.</p>
-          <label>Your WhatsApp phone number
-            <input id="inCallMeBotPhone" type="tel" value="${state.settings.callMeBotPhone || ''}" placeholder="e.g. 9198XXXXXXXX">
-          </label>
-          <label>CallMeBot API Key
-            <input id="inCallMeBotApiKey" type="text" value="${state.settings.callMeBotApiKey || ''}" placeholder="Get free API key from callmebot.com">
-          </label>
-          <div class="btn-row">
-            <button class="btn" id="btnTestCallMeBot">Test WhatsApp alert</button>
+          <div class="settings-section-title">Backend & Cloud Sync</div>
+          <div style="font-size: 13px; color: var(--ink-soft); line-height: 1.5; background: var(--bg); padding: 10px 12px; border-radius: 10px;">
+            ${credentials.url ? `
+              <div style="display: flex; align-items: center; gap: 6px; color: var(--both); font-weight: 600;">
+                <span class="sync-dot online"></span> Supabase Realtime Active
+              </div>
+              <div style="font-size: 11.5px; margin-top: 4px; color: var(--ink-soft);">Configured via <code>.env</code>. Multi-device live sync is enabled.</div>
+            ` : `
+              <div style="display: flex; align-items: center; gap: 6px; color: var(--am); font-weight: 600;">
+                <span class="sync-dot local"></span> Local Storage Mode
+              </div>
+              <div style="font-size: 11.5px; margin-top: 4px; color: var(--ink-soft);">To sync across different phones, add your free Supabase credentials to <code>.env</code> (see <code>.env.example</code>).</div>
+            `}
           </div>
 
-          <div class="btn-row" style="margin-top: 14px;">
-            <button class="btn primary" id="btnSaveSettings">Save all settings</button>
+          <div class="btn-row" style="margin-top: 6px;">
+            <button class="btn primary" id="btnSaveSettings">Save settings</button>
           </div>
 
-          <div class="settings-section-title" style="color: var(--miss); margin-top: 18px;">Danger Zone</div>
+          <div class="settings-section-title" style="color: var(--miss); margin-top: 14px;">Danger Zone</div>
           ${state.resetConfirm ? `
             <div class="reset-confirm-card">
               <p>Are you sure? This will wipe all logged entries and restart your adapalene cycle at day one.</p>
@@ -421,25 +415,11 @@ function render(pulse = false) {
       state.settings.amTime = document.getElementById('inAmTime')?.value || '08:00';
       state.settings.pmTime = document.getElementById('inPmTime')?.value || '22:00';
       state.settings.routineStartDate = document.getElementById('inStartDate')?.value || t;
-      state.settings.callMeBotPhone = (document.getElementById('inCallMeBotPhone')?.value || '').trim();
-      state.settings.callMeBotApiKey = (document.getElementById('inCallMeBotApiKey')?.value || '').trim();
 
-      // Save Supabase credentials if modified
-      const newUrl = document.getElementById('inSupabaseUrl')?.value || '';
-      const newKey = document.getElementById('inSupabaseKey')?.value || '';
-      saveSupabaseCredentials(newUrl, newKey);
-
-      // Re-init storage if credentials updated
       storage.save(state.entries, state.settings);
-      if (newUrl && newKey) {
-        storage.initSupabase();
-      }
-
       showToast('Settings saved successfully');
       render(false);
     });
-
-    document.getElementById('btnTestCallMeBot')?.addEventListener('click', testCallMeBot);
 
     if (state.resetConfirm) {
       document.getElementById('btnResetConfirm')?.addEventListener('click', () => {

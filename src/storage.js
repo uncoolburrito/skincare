@@ -89,14 +89,27 @@ export function getShareableUrl(slug = currentSlug) {
  * Get active Supabase credentials (from localStorage or environment variables)
  */
 export function getSupabaseCredentials() {
-  const localUrl = localStorage.getItem(SUPABASE_URL_KEY);
-  const localKey = localStorage.getItem(SUPABASE_ANON_KEY);
   const envUrl = import.meta.env?.VITE_SUPABASE_URL;
   const envKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
+  const localUrl = localStorage.getItem(SUPABASE_URL_KEY);
+  const localKey = localStorage.getItem(SUPABASE_ANON_KEY);
 
   return {
-    url: (localUrl || envUrl || '').trim(),
-    anonKey: (localKey || envKey || '').trim()
+    url: (envUrl || localUrl || '').trim(),
+    anonKey: (envKey || localKey || '').trim(),
+    isFromEnv: !!(envUrl && envKey)
+  };
+}
+
+export function getCallMeBotCredentials() {
+  const envPhone = import.meta.env?.VITE_CALLMEBOT_PHONE;
+  const envKey = import.meta.env?.VITE_CALLMEBOT_API_KEY;
+  const localPhone = localStorage.getItem('skinstreak_callmebot_phone');
+  const localKey = localStorage.getItem('skinstreak_callmebot_key');
+
+  return {
+    phone: (envPhone || localPhone || '').trim(),
+    apiKey: (envKey || localKey || '').trim()
   };
 }
 
