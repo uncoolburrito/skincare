@@ -32,8 +32,8 @@ A private, shared two-person skincare habit tracker built for accountability. On
 
 ```bash
 # 1. Clone the repository
-git clone git@github.com:uncoolburrito/skincare-streak.git
-cd skincare-streak
+git clone git@github.com:uncoolburrito/skincare.git
+cd skincare
 
 # 2. Install dependencies
 npm install
