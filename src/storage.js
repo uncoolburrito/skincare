@@ -26,8 +26,9 @@ export const DEFAULT_SETTINGS = {
   routineStartDate: ''
 };
 
-// The canonical tracker ID where your shared habit data is permanently stored.
-export const CANONICAL_TRACKER_ID = '4140b1a4566bc19b';
+// The canonical tracker ID matching your deployed URL
+export const CANONICAL_TRACKER_ID = 'd5167ad2d258c91a';
+export const FALLBACK_TRACKER_ID = '4140b1a4566bc19b';
 
 /**
  * Extracts or returns the shared canonical tracker slug.
@@ -310,7 +311,7 @@ export class StorageController {
     if (!supabaseClient) return;
 
     try {
-      const { data, error } = await supabaseClient
+      let { data, error } = await supabaseClient
         .from('skin_streak_logs')
         .select('*')
         .eq('id', this.slug)
@@ -319,6 +320,28 @@ export class StorageController {
       if (error) {
         console.warn('Supabase fetch error:', error);
         return;
+      }
+
+      // If current slug has no entries yet, seamlessly fallback to any populated row (e.g. 4140b1a4566bc19b or default)
+      if (!data || !data.entries || Object.keys(data.entries).length === 0) {
+        const { data: allRows } = await supabaseClient
+          .from('skin_streak_logs')
+          .select('*')
+          .order('updated_at', { ascending: false });
+
+        if (allRows && allRows.length > 0) {
+          const populated = allRows.find(r => r.entries && Object.keys(r.entries).length > 0);
+          if (populated) {
+            data = populated;
+            // Sync this data into the current slug so it stays permanently linked!
+            await supabaseClient.from('skin_streak_logs').upsert({
+              id: this.slug,
+              entries: populated.entries,
+              settings: populated.settings,
+              updated_at: new Date().toISOString()
+            });
+          }
+        }
       }
 
       if (data) {
