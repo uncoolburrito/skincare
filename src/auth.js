@@ -5,8 +5,42 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://whekrgnecterjouoyxer.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoZWtyZ25lY3RlcmpvdW95eGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0NTI3NTQsImV4cCI6MjEwNTAyODc1NH0.qrER44GUSzigfvurBV68x42gjREn2wOooY-RvzuCC2o';
+export function sanitizeAnonKey(raw) {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  str = str.replace(/^["']+|["']+$/g, '');
+  if (str.includes('\n') || str.includes('\r')) {
+    const lines = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
+    str = lines[0] || '';
+  }
+  if (str.includes(' ')) {
+    str = str.split(/\s+/)[0].trim();
+  }
+  const parts = str.split('.');
+  if (parts.length >= 3) {
+    str = parts.slice(0, 3).join('.');
+  }
+  return str.trim();
+}
+
+export function sanitizeUrl(raw) {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  str = str.replace(/^["']+|["']+$/g, '');
+  if (str.includes('\n') || str.includes('\r')) {
+    str = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean)[0] || '';
+  }
+  if (str.includes(' ')) {
+    str = str.split(/\s+/)[0].trim();
+  }
+  return str.replace(/\/+$/, '');
+}
+
+const FALLBACK_URL = 'https://whekrgnecterjouoyxer.supabase.co';
+const FALLBACK_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoZWtyZ25lY3RlcmpvdW95eGVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0NTI3NTQsImV4cCI6MjEwNTAyODc1NH0.qrER44GUSzigfvurBV68x42gjREn2wOooY-RvzuCC2o';
+
+export const SUPABASE_URL = sanitizeUrl(import.meta.env.VITE_SUPABASE_URL) || FALLBACK_URL;
+export const SUPABASE_ANON_KEY = sanitizeAnonKey(import.meta.env.VITE_SUPABASE_ANON_KEY) || FALLBACK_ANON_KEY;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
@@ -65,32 +99,52 @@ export async function sendMagicLink(email) {
   }
 
   const cleanEmail = email.trim().toLowerCase();
-  const redirectUrl = window.location.origin + window.location.pathname;
+  const origin = window.location.origin;
+  const path = window.location.pathname.replace(/\/+$/, '') || '';
+  const redirectUrl = `${origin}${path}/`;
 
-  const { data, error } = await supabase.auth.signInWithOtp({
-    email: cleanEmail,
-    options: {
-      emailRedirectTo: redirectUrl
+  try {
+    const { data, error } = await supabase.auth.signInWithOtp({
+      email: cleanEmail,
+      options: {
+        emailRedirectTo: redirectUrl
+      }
+    });
+
+    if (error) {
+      if (error.status === 429 || error.code === 'over_email_send_rate_limit') {
+        throw new Error('Email rate limit reached (free tier limit is ~3 emails/hr). Please wait a few minutes before trying again.');
+      }
+      if (error.code === 'email_address_invalid') {
+        throw new Error('This email address format was rejected by the server. Please check for typos.');
+      }
+      throw new Error(error.message || 'Failed to send magic link.');
     }
-  });
 
-  if (error) {
-    throw error;
+    return data;
+  } catch (err) {
+    if (err.message && err.message.toLowerCase().includes('failed to execute') && err.message.toLowerCase().includes('fetch')) {
+      throw new Error('Connection error communicating with Supabase. Please check your network or credentials.');
+    }
+    throw err;
   }
-
-  return data;
 }
 
 /**
  * Gets the current active session
  */
 export async function getSession() {
-  const { data: { session }, error } = await supabase.auth.getSession();
-  if (error) {
-    console.error('[Auth] Error getting session:', error);
+  try {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.error('[Auth] Error getting session:', error);
+      return null;
+    }
+    return session;
+  } catch (e) {
+    console.error('[Auth] Session retrieval exception:', e);
     return null;
   }
-  return session;
 }
 
 /**
@@ -105,9 +159,13 @@ export async function getCurrentUser() {
  * Signs out
  */
 export async function signOut() {
-  const { error } = await supabase.auth.signOut();
-  if (error) {
-    console.error('[Auth] Error signing out:', error);
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error('[Auth] Error signing out:', error);
+    }
+  } catch (e) {
+    console.error('[Auth] Sign out exception:', e);
   }
   clearPendingInviteToken();
 }
@@ -129,18 +187,22 @@ export async function redeemInvite(inviteToken) {
     return { success: false, error: 'No invite token provided' };
   }
 
-  const { data, error } = await supabase.rpc('redeem_partner_invite', {
-    invite_token: inviteToken.trim()
-  });
+  try {
+    const { data, error } = await supabase.rpc('redeem_partner_invite', {
+      invite_token: inviteToken.trim()
+    });
 
-  if (error) {
-    console.error('[Auth] Error redeeming invite:', error);
-    return { success: false, error: error.message };
+    if (error) {
+      console.error('[Auth] Error redeeming invite:', error);
+      return { success: false, error: error.message };
+    }
+
+    if (data && data.success) {
+      clearPendingInviteToken();
+    }
+
+    return data;
+  } catch (e) {
+    return { success: false, error: e.message };
   }
-
-  if (data && data.success) {
-    clearPendingInviteToken();
-  }
-
-  return data;
 }
