@@ -311,55 +311,39 @@ export class StorageController {
     if (!supabaseClient) return;
 
     try {
-      let { data, error } = await supabaseClient
+      const { data: rows, error } = await supabaseClient
         .from('skin_streak_logs')
         .select('*')
-        .eq('id', this.slug)
-        .maybeSingle();
+        .order('updated_at', { ascending: false });
 
       if (error) {
         console.warn('Supabase fetch error:', error);
         return;
       }
 
-      // If current slug has no entries yet, seamlessly fallback to any populated row (e.g. 4140b1a4566bc19b or default)
-      if (!data || !data.entries || Object.keys(data.entries).length === 0) {
-        const { data: allRows } = await supabaseClient
-          .from('skin_streak_logs')
-          .select('*')
-          .order('updated_at', { ascending: false });
+      if (rows && rows.length > 0) {
+        const matching = rows.find(r => r.id === this.slug);
+        const hasEntries = (r) => r && r.entries && Object.keys(r.entries).length > 0;
+        const populated = (matching && hasEntries(matching)) ? matching : rows.find(hasEntries);
+        const record = populated || matching || rows[0];
 
-        if (allRows && allRows.length > 0) {
-          const populated = allRows.find(r => r.entries && Object.keys(r.entries).length > 0);
-          if (populated) {
-            data = populated;
-            // Sync this data into the current slug so it stays permanently linked!
-            await supabaseClient.from('skin_streak_logs').upsert({
-              id: this.slug,
-              entries: populated.entries,
-              settings: populated.settings,
-              updated_at: new Date().toISOString()
-            });
-          }
+        if (record) {
+          const remoteEntries = record.entries || {};
+          const remoteSettings = { ...DEFAULT_SETTINGS, ...(record.settings || {}) };
+
+          // Deep merge local and remote so past dates are never dropped
+          const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
+
+          this.currentData = {
+            entries: mergedEntries,
+            settings: remoteSettings
+          };
+
+          saveLocalData(this.slug, this.currentData);
+          this.onDataChanged(this.currentData, { source: 'supabase-fetch' });
         }
-      }
-
-      if (data) {
-        const remoteEntries = data.entries || {};
-        const remoteSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-
-        // Deep merge local and remote so nothing is dropped
-        const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
-
-        this.currentData = {
-          entries: mergedEntries,
-          settings: remoteSettings
-        };
-
-        saveLocalData(this.slug, this.currentData);
-        this.onDataChanged(this.currentData, { source: 'supabase-fetch' });
       } else if (isInitial) {
-        // Record doesn't exist yet for this slug; push initial state
+        // Record doesn't exist yet; push initial state
         await this.pushRemoteData(this.currentData);
       }
     } catch (e) {
@@ -371,13 +355,12 @@ export class StorageController {
     if (!supabaseClient) return;
 
     try {
-      // First fetch latest remote data to merge past entries so nothing is ever overwritten
-      const { data: existing } = await supabaseClient
+      const { data: rows } = await supabaseClient
         .from('skin_streak_logs')
         .select('entries, settings')
-        .eq('id', this.slug)
-        .maybeSingle();
+        .eq('id', this.slug);
 
+      const existing = rows && rows[0];
       const remoteEntries = (existing && existing.entries) || {};
       const remoteSettings = (existing && existing.settings) || {};
 

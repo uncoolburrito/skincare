@@ -433,14 +433,7 @@ function init() {
     (statusObj) => {
       state.syncStatus = statusObj;
       if (state.loaded) {
-        const indicator = document.querySelector('.sync-status-indicator');
-        if (indicator) {
-          indicator.innerHTML = `
-            <span class="sync-dot ${statusObj.status}"></span>
-            <span>${statusObj.provider === 'supabase' ? 'Supabase Live Sync' : 'Local / Offline Sync'}</span>
-          `;
-          indicator.title = statusObj.message;
-        }
+        render(false);
       }
     }
   );
