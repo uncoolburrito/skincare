@@ -1,44 +1,147 @@
 # Skin Streak ✨
 
-A private, shared two-person skincare habit tracker built for accountability. One user logs daily morning and night routines; an accountability partner sees the exact same log in real time and receives automatic WhatsApp check-in updates.
+> A minimal, real-time shared skincare habit tracker designed for two-person accountability.
 
-![Skin Streak Preview](https://img.shields.io/badge/Designed%20for-Accountability-E2A64B?style=for-the-badge)
-![Supabase Realtime](https://img.shields.io/badge/Database-Supabase%20Realtime-5B7D62?style=for-the-badge)
-![Deployment](https://img.shields.io/badge/Deploy-Vercel%20%7C%20Netlify-2B2E6B?style=for-the-badge)
-
----
-
-## Features
-
-- **One-Tap AM/PM Check-In**: Tapping a routine ON marks the slot done with an exact timestamp, persists the log, and automatically deep-links to WhatsApp with a pre-filled update for your friend.
-- **Silent Un-logging**: Tapping a slot OFF silently un-logs without triggering any WhatsApp notification.
-- **Contextual Adapalene Routine Guide**: Eliminates guesswork by computing weeks elapsed since `routineStartDate`:
-  - **Morning**: Constant: *Wash → Azelaic acid 10% → Moisturizer → Sunscreen*
-  - **Weeks 1–2**: Alternates adapalene and rest nights every other day
-  - **Weeks 3–4**: Nightly adapalene (with irritation warnings)
-  - **Week 5+**: Nightly maintenance routine
-- **Streak & Consistency Metrics**:
-  - **Current Streak**: Consecutive completed days (today in progress never breaks streak).
-  - **Longest Streak**: Historical best consecutive run.
-  - **Missed Days**: Past calendar days where routines weren't finished.
-- **12-Week Heatmap**: GitHub-contribution-style grid (Sunday-first, 7 rows × 12 columns). Clicking/tapping any cell displays full date details and AM/PM timestamps.
-- **Multi-Device Realtime Sync**: Powered by Supabase Realtime (PostgreSQL CDC over WebSockets) with automatic fallback to `localStorage` and `BroadcastChannel`.
-- **In-App Reset Flow**: Native confirmation dialogs (no `alert()` or `confirm()`) that cleanly wipes past data and resets the cycle to Day 1.
-- **Stretch Goal: Automated Reminders**: Optional webhook support via CallMeBot for scheduled WhatsApp nudges.
+[![Vite](https://img.shields.io/badge/Vite-6.x-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Supabase](https://img.shields.io/badge/Database-Supabase%20Realtime-3ECF8E?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com/)
+[![Design](https://img.shields.io/badge/Palette-Warm%20Parchment-E2A64B?style=flat-square)](#design-philosophy)
+[![License](https://img.shields.io/badge/License-MIT-2B2E6B?style=flat-square)](LICENSE)
 
 ---
 
-## Getting Started Locally
+## Why Skin Streak?
+
+Skincare consistency—especially when introducing powerful active ingredients like **Adapalene** or retinoids—is notoriously difficult to maintain alone. Most habit apps fail here because they are either bloated with generic features or require too many taps to log a simple daily routine.
+
+**Skin Streak** strips away all friction:
+- **No account sign-ups or passwords**: Accessible only via an unguessable private link shared between you and your accountability partner.
+- **One-tap check-in**: Tapping a routine logs the exact timestamp, updates the streak, and opens a pre-filled WhatsApp update to your partner in a single gesture.
+- **Contextual routine guidance**: Eliminates mental load by computing your exact retinoid ramp-up phase day-by-day.
+- **Instant multi-device sync**: When you check off a routine, your partner's screen updates within milliseconds.
+
+---
+
+## Key Features
+
+### 1. One-Tap AM/PM Check-In & WhatsApp Compose
+- **Morning & Night targets**: Large, tactile buttons (48px+ tap targets) designed for quick mobile check-ins.
+- **One-action logging**: Tapping a slot ON logs the exact timestamp (`amAt` / `pmAt`), persists data, and opens a WhatsApp compose window (`wa.me`) with a pre-formatted message (e.g., *"Morning skincare done (8:14 AM). Streak: 12 days."*).
+- **Silent correction**: Tapping a slot back OFF quietly un-logs the routine without sending an alert.
+- **Manual status nudge**: A dedicated button to nudge your partner before logging (*"Check-in: haven't done my routine yet today"*).
+
+### 2. Day-by-Day Routine Guide
+Active dermatological routines require progressive adaptation to avoid skin barrier irritation. Based on your `routineStartDate`, Skin Streak automatically calculates your current stage:
+- **Morning**: Fixed everyday routine:  
+  `Wash → Azelaic acid 10% → Moisturizer → Sunscreen`
+- **Night**: Contextual guidance adapted to elapsed weeks:
+  - **Weeks 1–2 (Build-up)**: Alternates Adapalene and rest nights every other day.
+  - **Weeks 3–4 (Build-up)**: Nightly Adapalene (with sensitivity precautions).
+  - **Week 5+ (Maintenance)**: Nightly standard routine.
+
+### 3. Consistency Metrics & Streak Math
+- **Current Streak**: Consecutive completed days (today in progress never breaks an active streak).
+- **Longest Streak**: All-time personal best consecutive run.
+- **Missed Days**: Past calendar days where routines were not completed.
+- **Completion Rate**: Real-time percentage of tracked days successfully completed.
+
+### 4. 12-Week Consistency Heatmap
+- GitHub-contribution-style grid: 7 rows (Sunday-first) × 12 columns (84 days).
+- Cell states: **Both Completed** (sage green), **AM Only** (gold), **Night Only** (indigo), **Missed** (brick red), and **Today Pending** (dashed border).
+- Interactive tap inspection on both desktop and mobile to view exact AM/PM completion times.
+
+### 5. Multi-Device Real-Time Sync
+- Powered by **Supabase Realtime** (PostgreSQL Change Data Capture over WebSockets).
+- Automatic offline fallback to `localStorage` and instant tab-to-tab sync via `BroadcastChannel`.
+
+### 6. Privacy by Obscurity
+- No multi-tenant user authentication or database tables tracking personal identities.
+- The entire log is keyed to an unguessable 16-character token in the URL (`/t/<token>`), accessible only to the two people who possess the link.
+
+---
+
+## Design Philosophy
+
+The interface was designed from the ground up to feel warm, calm, and tactile—avoiding generic SaaS dashboards and heavy drop shadows:
+
+| Token | Hex | Role |
+| :--- | :--- | :--- |
+| **Background** | `#F6EFE6` | Warm parchment canvas |
+| **Panel** | `#FFFDF8` | Soft card surfaces |
+| **Ink** | `#2A2420` | High-contrast editorial typography |
+| **Morning Accent** | `#E2A64B` | Warm gold |
+| **Night Accent** | `#2B2E6B` | Deep indigo |
+| **Success** | `#5B7D62` | Sage green for completed routines |
+| **Missed** | `#B45341` | Brick red for past incomplete days |
+
+**Typography**:
+- **Fraunces** (Serif) — Expressive display typeface for streak counters and primary headings.
+- **Sora** (Sans-Serif) — Clean, legible modern sans for interface controls and routine steps.
+
+---
+
+## Tech Stack
+
+- **Frontend**: Vanilla JavaScript (ES Modules), HTML5, Vanilla CSS
+- **Build Tool**: [Vite](https://vitejs.dev/) (lightning-fast HMR and minimal static bundle)
+- **Database & Sync**: [Supabase](https://supabase.com/) (PostgreSQL + Realtime WebSockets)
+- **Deployment**: [Vercel](https://vercel.com/) / [Netlify](https://www.netlify.com/) (Static SPA)
+
+---
+
+## Project Structure
+
+```text
+skincare/
+├── index.html              # Main HTML entry point with Google Fonts
+├── supabase_schema.sql     # Database schema, RLS policies & Realtime publication
+├── vercel.json             # SPA routing rewrite configuration
+├── vite.config.js          # Vite build configuration
+├── src/
+│   ├── main.js             # Application controller & DOM rendering
+│   ├── storage.js          # Dual-engine sync (Supabase Realtime + local cache)
+│   ├── streak.js           # Core streak math, routine rules & WhatsApp templates
+│   └── style.css           # Design tokens, responsive grid & tactile animations
+├── scripts/
+│   └── check-reminders.js  # Scheduled reminder script for CallMeBot WhatsApp nudges
+└── test/
+    └── streak.test.js      # Unit tests for streak calculations & routine phases
+```
+
+---
+
+## Getting Started
+
+### 1. Clone & Install
 
 ```bash
-# 1. Clone the repository
-git clone git@github.com:uncoolburrito/skincare.git
+git clone https://github.com/uncoolburrito/skincare.git
 cd skincare
-
-# 2. Install dependencies
 npm install
+```
 
-# 3. Start development server
+### 2. Environment Configuration
+
+Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+Add your Supabase credentials:
+```env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
+```
+
+### 3. Database Setup (Supabase)
+
+1. Create a free project at [supabase.com](https://supabase.com).
+2. Open the **SQL Editor** in your Supabase dashboard.
+3. Paste and run the contents of [`supabase_schema.sql`](./supabase_schema.sql).
+4. Copy your **Project URL** and **`anon` `public` key** from *Settings → API* into `.env`.
+
+### 4. Run Locally
+
+```bash
 npm run dev
 ```
 
@@ -46,41 +149,18 @@ Visit `http://localhost:5173/` in your browser.
 
 ---
 
-## Multi-Device Cloud Sync Setup (Supabase)
-
-To sync in real time across different phones/laptops:
-
-1. Create a free project at [supabase.com](https://supabase.com).
-2. Go to the **SQL Editor** in your Supabase dashboard and run the contents of [`supabase_schema.sql`](./supabase_schema.sql).
-3. Copy your **Project URL** and **anon public key** from *Project Settings → API*.
-4. Open Skin Streak in your browser, tap **Settings**, scroll down to **Cloud Sync (Supabase)**, paste both keys, and tap **Save all settings**.
-5. Once saved, both devices on the same link will receive instant live updates whenever either routine is checked off!
-
----
-
-## Obscurity-Based Privacy (Unguessable Link)
-
-Skin Streak generates an unguessable 16-character hex token in the URL:
-```
-https://your-domain.com/#/t/3f9a7c1e82b4501a
-```
-Tap **Share link** in the top header to copy the URL and send it to your friend. Anyone with this link shares the exact same log and real-time state.
-
----
-
 ## Deployment
 
-### Vercel (Recommended)
-1. Push this repository to your GitHub account (`uncoolburrito/skincare-streak`).
-2. Go to [vercel.com/new](https://vercel.com/new) and import the repository.
-3. Framework Preset: **Vite** (Build command: `npm run build`, Output directory: `dist`).
-4. (Optional) Add environment variables:
+Deploying Skin Streak is as simple as hosting any modern static Vite web app:
+
+1. Import the repository into [Vercel](https://vercel.com) or [Netlify](https://www.netlify.com).
+2. Configure your Environment Variables:
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
-5. Click **Deploy**.
+3. Deploy! The application builds into a static bundle served via global CDN edge nodes with sub-second page loads.
 
 ---
 
 ## License
 
-MIT License. Personal accountability tool.
+Distributed under the [MIT License](LICENSE). Built for personal accountability and consistency.
