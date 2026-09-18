@@ -1,50 +1,55 @@
 /**
- * Skin Streak — Main Application Controller
+ * Skin Streak v3 — Main Application Controller
+ * Handles Supabase magic-link auth flow, Owner vs Partner role rendering,
+ * one-tap check-in with instant WhatsApp notification, adaptive adapalene guide,
+ * 60-cycle timeline strip, and settings modal with in-app confirmations.
  */
 
 import {
-  todayStr,
-  formatTime,
-  formatDateFull,
-  computeStreak,
-  computeLongest,
-  computeMissed,
-  computeTotals,
-  computeNightPlan,
-  amGuideHtml,
-  pmGuideHtml,
-  buildGridCells,
-  cellStatus,
-  cellDetails,
-  waMessageForSlot,
-  waMessageNow
-} from './streak.js';
+  sendMagicLink,
+  getCurrentUser,
+  signOut,
+  onAuthStateChange,
+  extractInviteTokenFromUrl,
+  clearPendingInviteToken
+} from './auth.js';
+
+import { StorageController } from './storage.js';
 
 import {
-  StorageController,
-  getOrCreateTrackerSlug,
-  getShareableUrl,
-  getSupabaseCredentials,
-  saveSupabaseCredentials,
-  DEFAULT_SETTINGS
-} from './storage.js';
+  getOpenCycle,
+  isCycleComplete,
+  computeTonightPlan,
+  computeAdapalenePhase,
+  computeCycleStreak,
+  computeLongestCycleStreak,
+  computeMissedCycles,
+  checkAdaptiveNudge,
+  buildCycleTimeline,
+  formatTime,
+  formatDateTime,
+  formatWhatsAppMessage,
+  formatManualWhatsAppMessage,
+  getAfterSleepGuide
+} from './cycles.js';
 
-// Global application state
+// Application State
 const state = {
-  slug: getOrCreateTrackerSlug(),
-  entries: {},
-  settings: { ...DEFAULT_SETTINGS },
-  loaded: false,
+  user: null,
+  loading: true,
+  storage: new StorageController(),
+  selectedCycleId: null,
   settingsOpen: false,
-  cloudSettingsOpen: false,
-  selectedCellDate: null,
-  syncStatus: { status: 'local', provider: 'local', message: 'Initializing…' }
+  confirmResetOpen: false,
+  confirmRevokeOpen: false,
+  magicLinkSentEmail: null,
+  inviteLinkData: null,
+  pendingInviteToken: null
 };
 
 const APP = document.getElementById('app');
 const TOAST = document.getElementById('toast');
 let toastTimer = null;
-let storage = null;
 
 function showToast(msg) {
   if (!TOAST) return;
@@ -53,52 +58,205 @@ function showToast(msg) {
   TOAST.classList.add('show');
   toastTimer = setTimeout(() => {
     TOAST.classList.remove('show');
-  }, 2600);
+  }, 2800);
 }
 
-function checkBanner() {
-  const now = new Date();
-  const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-  const t = todayStr();
-  const e = state.entries[t] || { am: false, pm: false };
-
-  if (state.settings.pmTime && hhmm >= state.settings.pmTime && !e.pm) {
-    return "Past your night routine time and it's not logged yet.";
-  }
-  if (
-    state.settings.amTime &&
-    hhmm >= state.settings.amTime &&
-    !e.am &&
-    hhmm < (state.settings.pmTime || '23:59')
-  ) {
-    return "Past your morning routine time and it's not logged yet.";
-  }
-  return null;
-}
-
-function openWhatsapp(message) {
-  const phone = (state.settings.friendPhone || '').replace(/[^0-9]/g, '');
-  if (!phone) {
-    showToast("Add your friend's number in Settings to enable WhatsApp check-ins");
+function openWhatsApp(phone, message) {
+  const clean = (phone || '').replace(/[^0-9]/g, '');
+  if (!clean) {
+    showToast("Add your partner's WhatsApp number in Settings to enable notifications");
     state.settingsOpen = true;
-    render(false);
-    setTimeout(() => {
-      const input = document.getElementById('inFriendPhone');
-      if (input) input.focus();
-    }, 150);
+    render();
     return;
   }
-  const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+  const url = `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-async function copyShareLink() {
-  const url = getShareableUrl(state.slug);
+// -----------------------------------------------------------------------------
+// App Initialization
+// -----------------------------------------------------------------------------
+async function initApp() {
+  state.pendingInviteToken = extractInviteTokenFromUrl();
+
+  // Listen to auth state transitions
+  onAuthStateChange(async (event, session) => {
+    console.log('[App] Auth state change event:', event);
+    const user = session ? session.user : null;
+    state.user = user;
+
+    if (user) {
+      state.loading = true;
+      render();
+      await state.storage.init(user, state.pendingInviteToken);
+      state.loading = false;
+      render();
+    } else {
+      state.loading = false;
+      render();
+    }
+  });
+
+  // Initial user check
+  const user = await getCurrentUser();
+  state.user = user;
+  if (user) {
+    await state.storage.init(user, state.pendingInviteToken);
+  }
+  state.loading = false;
+
+  // Subscribe to storage changes (realtime updates, DB mutations)
+  state.storage.subscribe(() => {
+    render();
+  });
+
+  // Listen to hash changes (e.g. user lands on #/join/<token>)
+  window.addEventListener('hashchange', async () => {
+    const token = extractInviteTokenFromUrl();
+    if (token !== state.pendingInviteToken) {
+      state.pendingInviteToken = token;
+      if (state.user) {
+        state.loading = true;
+        render();
+        await state.storage.init(state.user, token);
+        state.loading = false;
+      }
+      render();
+    }
+  });
+
+  render();
+}
+
+// -----------------------------------------------------------------------------
+// Action Handlers
+// -----------------------------------------------------------------------------
+
+async function handleSendMagicLink(e) {
+  e.preventDefault();
+  const input = document.getElementById('authEmailInput');
+  const email = input ? input.value.trim() : '';
+
+  if (!email || !email.includes('@')) {
+    showToast('Please enter a valid email address.');
+    return;
+  }
+
+  const btn = document.getElementById('btnSendMagic');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Sending link…';
+  }
+
+  try {
+    await sendMagicLink(email);
+    state.magicLinkSentEmail = email;
+    render();
+  } catch (err) {
+    console.error('Magic link error:', err);
+    showToast(err.message || 'Failed to send magic link.');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Send Magic Link';
+    }
+  }
+}
+
+async function handleSignOut() {
+  await signOut();
+  state.user = null;
+  state.magicLinkSentEmail = null;
+  state.settingsOpen = false;
+  state.confirmResetOpen = false;
+  state.confirmRevokeOpen = false;
+  render();
+}
+
+/**
+ * Feature 1: One-tap check-in
+ * Logs timestamp into current open cycle, saves to Supabase, and opens WhatsApp
+ */
+async function handleCheckInTap(type) {
+  if (state.storage.role !== 'owner') return;
+
+  const storageState = state.storage.getState();
+  const tracker = storageState.tracker;
+  const cycles = storageState.cycles;
+  const tonightPlan = computeTonightPlan(cycles);
+
+  try {
+    // 1. Record and save to Supabase
+    const savedCycle = await state.storage.checkIn(type);
+    showToast(`${type === 'afterSleep' ? 'After Sleep' : 'Before Sleep'} check-in recorded!`);
+
+    // 2. Open WhatsApp to Partner with pre-filled message (one tap does both)
+    const newCycles = state.storage.getState().cycles;
+    const streak = computeCycleStreak(newCycles);
+    const message = formatWhatsAppMessage(type, savedCycle, streak, tonightPlan);
+
+    const partnerPhone = tracker?.partner_phone;
+    if (partnerPhone) {
+      openWhatsApp(partnerPhone, message);
+    } else {
+      showToast("Check-in logged! (Add partner's WhatsApp number in Settings to notify them)");
+    }
+  } catch (err) {
+    console.error('Check-in error:', err);
+    showToast('Failed to save check-in. Please try again.');
+  }
+}
+
+async function handleUnCheckInTap(type) {
+  if (state.storage.role !== 'owner') return;
+  try {
+    await state.storage.unCheckIn(type);
+    showToast('Check-in un-checked.');
+  } catch (err) {
+    console.error('Un-check error:', err);
+    showToast('Failed to update.');
+  }
+}
+
+async function handleSaveSettings(e) {
+  e.preventDefault();
+  const nameInput = document.getElementById('inPartnerName');
+  const phoneInput = document.getElementById('inPartnerPhone');
+  const nudgeInput = document.getElementById('inNudgeThreshold');
+
+  const partner_name = nameInput ? nameInput.value.trim() : '';
+  const partner_phone = phoneInput ? phoneInput.value.trim() : '';
+  const nudge_threshold_hours = nudgeInput ? Number(nudgeInput.value) || 14 : 14;
+
+  try {
+    await state.storage.updateSettings({
+      partner_name,
+      partner_phone,
+      nudge_threshold_hours
+    });
+    showToast('Settings saved successfully!');
+    state.settingsOpen = false;
+    render();
+  } catch (err) {
+    showToast('Failed to save settings.');
+  }
+}
+
+async function handleGenerateInvite() {
+  try {
+    const invite = await state.storage.createInvite();
+    state.inviteLinkData = invite;
+    render();
+    showToast('Invite link generated! Valid for 7 days.');
+  } catch (err) {
+    showToast('Failed to generate invite link.');
+  }
+}
+
+async function handleCopyInviteLink(url) {
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(url);
     } else {
-      // Fallback
       const temp = document.createElement('input');
       temp.value = url;
       document.body.appendChild(temp);
@@ -106,359 +264,674 @@ async function copyShareLink() {
       document.execCommand('copy');
       document.body.removeChild(temp);
     }
-    showToast('Link copied! Share this with your friend.');
+    showToast('Invite link copied to clipboard!');
   } catch (e) {
     showToast('URL: ' + url);
   }
 }
 
-function toggleSlot(slot) {
-  const t = todayStr();
-  const current = state.entries[t] ? { ...state.entries[t] } : { am: false, pm: false };
-  const turningOn = !current[slot];
-
-  current[slot] = turningOn;
-  if (turningOn) {
-    current[`${slot}At`] = new Date().toISOString();
-  } else {
-    delete current[`${slot}At`];
-  }
-
-  state.entries[t] = current;
-
-  // If turning on: immediately trigger WhatsApp compose in response to user click
-  if (turningOn) {
-    const msg = waMessageForSlot(slot, state.entries, state.settings, t);
-    openWhatsapp(msg);
-  }
-
-  // Save to storage
-  storage.save(state.entries, state.settings);
-  render(turningOn);
-}
-
-async function testCallMeBot() {
-  const phone = (state.settings.callMeBotPhone || state.settings.friendPhone || '').replace(/[^0-9]/g, '');
-  const apiKey = (state.settings.callMeBotApiKey || '').trim();
-
-  if (!phone || !apiKey) {
-    showToast('Enter your WhatsApp phone number and CallMeBot API key first.');
-    return;
-  }
-
-  showToast('Sending test message via CallMeBot…');
+async function handleRevokePartner() {
   try {
-    const testMsg = encodeURIComponent('Test reminder from Skin Streak: Your webhook reminders are working!');
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${testMsg}&apikey=${apiKey}`;
-    const res = await fetch(url, { mode: 'no-cors' });
-    showToast('Test sent! Check your WhatsApp.');
+    await state.storage.revokePartner();
+    state.confirmRevokeOpen = false;
+    showToast('Partner access has been revoked.');
+    render();
   } catch (e) {
-    showToast('Failed to send CallMeBot test alert.');
+    showToast('Failed to revoke partner access.');
   }
 }
 
-function render(pulse = false) {
-  if (!state.loaded) {
+async function handleResetCycles() {
+  try {
+    await state.storage.resetCycles();
+    state.confirmResetOpen = false;
+    state.settingsOpen = false;
+    showToast('All cycle history reset! Phase restarted at Build-up.');
+    render();
+  } catch (e) {
+    showToast('Failed to reset cycles.');
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Render Methods
+// -----------------------------------------------------------------------------
+
+function render() {
+  if (!APP) return;
+
+  if (state.loading) {
     APP.innerHTML = `
       <div class="loading">
         <div class="spinner"></div>
-        <div>Loading your log…</div>
+        <div>Loading your habit log…</div>
       </div>
     `;
     return;
   }
 
-  const t = todayStr();
-  const todayEntry = state.entries[t] || { am: false, pm: false };
-  const streak = computeStreak(state.entries, t);
-  const longest = computeLongest(state.entries, t);
-  const missed = computeMissed(state.entries, t);
-  const totals = computeTotals(state.entries);
-  const banner = checkBanner();
-  const cells = buildGridCells(t, 12);
-  const friendName = state.settings.friendName ? state.settings.friendName.trim() : 'your friend';
-  const nightPlan = computeNightPlan(state.settings.routineStartDate, t);
-  const credentials = getSupabaseCredentials();
+  // Not authenticated -> Render Auth Screen
+  if (!state.user) {
+    renderAuthScreen();
+    return;
+  }
 
-  // Selected cell details (for mobile or desktop tap)
-  const inspected = state.selectedCellDate ? cellDetails(state.selectedCellDate, state.entries, t) : null;
+  const storageState = state.storage.getState();
+
+  // Revoked view
+  if (storageState.role === 'revoked') {
+    APP.innerHTML = `
+      <div class="auth-wrap">
+        <div class="auth-icon">🔒</div>
+        <h2 class="auth-title">Access Revoked</h2>
+        <p class="auth-desc">Your partner access to this Skin Streak log has been removed by the owner.</p>
+        <button class="btn-primary" id="btnSignOutRevoked" style="max-width: 200px; margin: 0 auto;">Sign Out</button>
+      </div>
+    `;
+    document.getElementById('btnSignOutRevoked')?.addEventListener('click', handleSignOut);
+    return;
+  }
+
+  // Main App View (Owner or Partner)
+  renderDashboard(storageState);
+}
+
+function renderAuthScreen() {
+  const isInvite = !!state.pendingInviteToken;
+
+  if (state.magicLinkSentEmail) {
+    APP.innerHTML = `
+      <div class="auth-wrap">
+        <div class="auth-icon">✨</div>
+        <h1 class="auth-title">Check Your Email</h1>
+        <p class="auth-desc">We sent a secure, passwordless magic link to:</p>
+        <div class="auth-success-card">
+          <div class="auth-success-title">Magic Link Sent</div>
+          <div class="auth-success-msg">
+            Click the link sent to <strong>${escapeHtml(state.magicLinkSentEmail)}</strong> to instantly sign in.
+          </div>
+        </div>
+        <p style="font-size: 12px; color: var(--ink-soft); margin-top: 20px;">
+          Didn't receive it? Check spam, or
+          <button id="btnTryDifferentEmail" style="color: var(--ink); text-decoration: underline; font-weight: 600;">try another email</button>.
+        </p>
+      </div>
+    `;
+    document.getElementById('btnTryDifferentEmail')?.addEventListener('click', () => {
+      state.magicLinkSentEmail = null;
+      render();
+    });
+    return;
+  }
 
   APP.innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-icon">✨</div>
+      <h1 class="auth-title">Skin Streak</h1>
+      <p class="auth-desc">Shared two-person habit tracker for irregular sleep schedules.</p>
+
+      ${isInvite ? `
+        <div class="auth-invite-banner">
+          <strong>Accountability Partner Invite</strong><br>
+          You've been invited to view your friend's skincare log in real time. Enter your email below to connect!
+        </div>
+      ` : ''}
+
+      <div class="auth-card">
+        <form id="authForm">
+          <div class="form-group">
+            <label class="form-label" for="authEmailInput">Your Email Address</label>
+            <input
+              type="email"
+              id="authEmailInput"
+              class="form-input"
+              placeholder="you@example.com"
+              required
+              autocomplete="email"
+            />
+          </div>
+          <button type="submit" id="btnSendMagic" class="btn-primary">
+            Send Magic Link
+          </button>
+        </form>
+        <p style="font-size: 11px; color: var(--ink-light); margin-top: 14px; text-align: center;">
+          Passwordless & secure. Supabase email magic link authentication.
+        </p>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('authForm')?.addEventListener('submit', handleSendMagicLink);
+}
+
+function renderDashboard(storageState) {
+  const isOwner = storageState.role === 'owner';
+  const isPartner = storageState.role === 'partner';
+  const tracker = storageState.tracker;
+  const cycles = storageState.cycles || [];
+
+  // Metrics
+  const streak = computeCycleStreak(cycles);
+  const longest = computeLongestCycleStreak(cycles);
+  const missed = computeMissedCycles(cycles);
+  const adapalenePhase = computeAdapalenePhase(cycles);
+  const tonightPlan = computeTonightPlan(cycles);
+  const openCycle = getOpenCycle(cycles);
+  const nudge = checkAdaptiveNudge(cycles, tracker?.nudge_threshold_hours || 14);
+
+  // Status of open cycle
+  const afterLogged = !!(openCycle && openCycle.after_sleep_at);
+  const beforeLogged = !!(openCycle && openCycle.before_sleep_at);
+
+  const afterSleepGuide = getAfterSleepGuide();
+
+  // Timeline
+  const timelineMarkers = buildCycleTimeline(cycles, 60);
+  const selectedCycle = state.selectedCycleId
+    ? timelineMarkers.find(m => m.id === state.selectedCycleId)
+    : null;
+
+  APP.innerHTML = `
+    <!-- Header -->
     <header>
       <div class="header-top">
-        <h1>Skin Streak</h1>
-        <button class="share-pill-btn" id="btnShare" title="Copy shareable link for friend">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-          </svg>
-          Share link
-        </button>
+        <div class="header-brand">
+          <h1>Skin Streak</h1>
+          <span class="role-badge ${isOwner ? 'owner' : 'partner'}">
+            ${isOwner ? 'Owner' : 'Partner'}
+          </span>
+        </div>
+        <div class="header-actions">
+          ${isOwner ? `
+            <button class="btn-icon" id="btnOpenSettings" title="Settings" aria-label="Settings">
+              ⚙️
+            </button>
+          ` : ''}
+          <button class="btn-icon" id="btnSignOut" title="Sign Out" aria-label="Sign Out">
+            🚪
+          </button>
+        </div>
       </div>
-      <p>Tap a slot when you finish it — it logs, shows what to use, and pings ${friendName} automatically.</p>
+      <div class="header-subtitle">
+        ${isOwner ? 'Your personal routine & accountability hub' : `Viewing ${escapeHtml(tracker?.partner_name || 'Owner')}'s habit log`}
+      </div>
     </header>
 
-    <div class="sync-bar">
-      <div class="sync-status-indicator" title="${state.syncStatus.message}">
-        <span class="sync-dot ${state.syncStatus.status}"></span>
-        <span>${state.syncStatus.provider === 'supabase' ? 'Supabase Live Sync' : 'Local / Offline Sync'}</span>
-      </div>
-      <span class="sync-slug" title="Tracker ID">#${state.slug.slice(0, 8)}…</span>
-    </div>
-
-    ${banner ? `
-      <section>
-        <div class="banner">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-          </svg>
-          <div>${banner}</div>
+    <!-- Partner View Read-Only Banner -->
+    ${isPartner ? `
+      <div class="partner-view-banner">
+        <span class="icon">👀</span>
+        <div>
+          <strong>Read-Only Accountability View</strong>
+          You're tracking in real time. Changes made by the owner update automatically.
         </div>
-      </section>
+      </div>
     ` : ''}
 
-    <section class="hero">
-      <div class="streak-number ${pulse ? 'pulse' : ''}" id="streakNum">${streak}</div>
-      <div class="streak-label">day streak</div>
-      <div class="best-label">best streak: <b>${longest}</b> &nbsp;&middot;&nbsp; missed days: <b>${missed}</b></div>
-    </section>
-
-    <section>
-      <h2>Today</h2>
-      <div class="today-card">
-        <!-- Morning Slot -->
-        <div class="slot am">
-          <div class="slot-top">
-            <button class="slot-btn am ${todayEntry.am ? 'done' : ''}" id="btnAm" aria-pressed="${todayEntry.am ? 'true' : 'false'}">
-              <span class="dot">${todayEntry.am ? '&#10003;' : ''}</span>
-              Morning
-            </button>
-            <div class="slot-meta">
-              <span class="slot-time ${todayEntry.am ? 'done' : ''}">${todayEntry.am ? 'logged ' + formatTime(todayEntry.amAt) : 'not yet'}</span>
-            </div>
-          </div>
-          <div class="slot-guide">${amGuideHtml()}</div>
-        </div>
-
-        <!-- Night Slot -->
-        <div class="slot pm">
-          <div class="slot-top">
-            <button class="slot-btn pm ${todayEntry.pm ? 'done' : ''}" id="btnPm" aria-pressed="${todayEntry.pm ? 'true' : 'false'}">
-              <span class="dot">${todayEntry.pm ? '&#10003;' : ''}</span>
-              Night
-            </button>
-            <div class="slot-meta">
-              <span class="slot-time ${todayEntry.pm ? 'done' : ''}">${todayEntry.pm ? 'logged ' + formatTime(todayEntry.pmAt) : 'not yet'}</span>
-            </div>
-          </div>
-          <div class="slot-guide">${pmGuideHtml(nightPlan)}</div>
+    <!-- Adaptive Nudge Banner (Feature 7) -->
+    ${(isOwner && nudge) ? `
+      <div class="nudge-banner">
+        <div class="nudge-icon">⏰</div>
+        <div class="nudge-content">
+          <div class="nudge-title">${escapeHtml(nudge.pendingLabel)} Pending</div>
+          <div class="nudge-msg">${escapeHtml(nudge.message)}</div>
         </div>
       </div>
-    </section>
+    ` : ''}
 
-    <section>
-      <button class="checkin-btn" id="btnWhatsapp">
-        <svg viewBox="0 0 24 24">
-          <path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm.01 1.67c4.54 0 8.24 3.7 8.24 8.24 0 2.2-.86 4.27-2.42 5.82a8.19 8.19 0 0 1-5.82 2.42c-1.48 0-2.93-.4-4.2-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.19 8.19 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.24-8.24zm4.52 11.66c-.25-.13-1.47-.72-1.7-.81-.23-.08-.39-.13-.56.13-.17.25-.64.81-.79.97-.14.17-.29.19-.54.06-.25-.13-1.06-.39-2.02-1.25-.75-.67-1.26-1.5-1.41-1.75-.15-.25-.02-.39.11-.51.11-.11.25-.29.37-.44.13-.15.17-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08s.89 2.41 1.02 2.58c.13.17 1.76 2.68 4.26 3.76.6.26 1.06.41 1.43.53.6.19 1.15.16 1.58.1.48-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.15-1.18-.06-.1-.22-.17-.47-.29z"/>
-        </svg>
-        Send a check-in now
-      </button>
-      <p class="checkin-hint">Marking morning or night done already messages ${friendName} for you — use this only if you want to nudge her separately (e.g. before you've done anything yet).</p>
-    </section>
-
-    <section>
-      <h2>Last 12 weeks</h2>
-      <div class="heatmap-card">
-        <div class="grid-scroll">
-          <div class="grid" id="gridEl"></div>
+    <!-- Streak Hero Card (Feature 3) -->
+    <div class="hero-card">
+      <div class="streak-display">
+        <div class="streak-number">${streak}</div>
+        <div class="streak-unit">${streak === 1 ? 'Cycle Streak' : 'Cycles Streak'}</div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-val">${longest}</div>
+          <div class="stat-lbl">Best Run</div>
         </div>
-
-        ${inspected ? `
-          <div class="cell-inspector">
-            <div>
-              <span class="cell-inspector-date">${inspected.dateFull}</span>
-              <span style="margin-left: 6px; color: var(--ink-soft);">
-                ${inspected.am ? 'AM: ' + inspected.amAt : 'AM: not done'} &bull; ${inspected.pm ? 'PM: ' + inspected.pmAt : 'PM: not done'}
-              </span>
-            </div>
-            <span class="cell-inspector-badge ${inspected.status}">${inspected.status.toUpperCase()}</span>
-          </div>
-        ` : ''}
-
-        <div class="legend">
-          <span><i class="am"></i>AM only</span>
-          <span><i class="pm"></i>Night only</span>
-          <span><i class="both"></i>Both done</span>
-          <span><i class="missed"></i>Missed</span>
-          <span><i class="pending"></i>Today</span>
+        <div class="stat-item">
+          <div class="stat-val">${missed}</div>
+          <div class="stat-lbl">Missed</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-val">${adapalenePhase.count}</div>
+          <div class="stat-lbl">Adapalene</div>
         </div>
       </div>
-    </section>
+    </div>
 
-    <section class="stats-row">
-      <div class="stat"><b>${totals.totalTracked}</b><span>days tracked</span></div>
-      <div class="stat"><b>${totals.rate}%</b><span>completion rate</span></div>
-    </section>
-
-    <section class="settings-card">
-      <button class="settings-toggle" id="btnSettings">
-        <span>Settings</span>
-        <span style="font-size: 18px;">${state.settingsOpen ? '&minus;' : '+'}</span>
-      </button>
-
-      ${state.settingsOpen ? `
-        <div class="settings-body">
-          <div class="settings-section-title">Accountability Partner</div>
-          <label>Friend's name
-            <input id="inFriendName" type="text" value="${state.settings.friendName || ''}" placeholder="e.g. Priya">
-          </label>
-          <label>Friend's WhatsApp number
-            <input id="inFriendPhone" type="tel" value="${state.settings.friendPhone || ''}" placeholder="Country code + number, e.g. 9198XXXXXXXX">
-          </label>
-
-          <div class="settings-section-title">Schedule & Routine</div>
-          <label>Morning routine target time
-            <input id="inAmTime" type="time" value="${state.settings.amTime || '08:00'}">
-          </label>
-          <label>Night routine target time
-            <input id="inPmTime" type="time" value="${state.settings.pmTime || '22:00'}">
-          </label>
-          <label>Adapalene start date
-            <input id="inStartDate" type="date" value="${state.settings.routineStartDate || t}">
-          </label>
-          <p class="hint">This date drives the day-by-day guide above — every-other-night for the first 2 weeks, nightly from week 3. Set it to the day you actually started.</p>
-
-          <div class="settings-section-title">Backend & Cloud Sync</div>
-          <div style="font-size: 13px; color: var(--ink-soft); line-height: 1.5; background: var(--bg); padding: 10px 12px; border-radius: 10px;">
-            ${credentials.url ? `
-              <div style="display: flex; align-items: center; gap: 6px; color: var(--both); font-weight: 600;">
-                <span class="sync-dot online"></span> Supabase Realtime Active
+    <!-- Owner Check-In Targets (Feature 1) -->
+    ${isOwner ? `
+      <div class="checkin-section">
+        <!-- After Sleep Card -->
+        <div class="checkin-card after-sleep">
+          <div class="checkin-main">
+            <div class="checkin-info">
+              <div class="checkin-tag">Event 1</div>
+              <h2 class="checkin-title">After Sleep</h2>
+              <div class="checkin-status ${afterLogged ? 'logged' : ''}">
+                ${afterLogged
+                  ? `✓ Logged at ${formatTime(openCycle.after_sleep_at)}`
+                  : 'Pending check-in'
+                }
               </div>
-              <div style="font-size: 11.5px; margin-top: 4px; color: var(--ink-soft);">Configured via <code>.env</code>. Multi-device live sync is enabled.</div>
+            </div>
+            ${afterLogged ? `
+              <button class="btn-tap-target checked" id="btnAfterSleepDone">
+                ✓ Done
+              </button>
             ` : `
-              <div style="display: flex; align-items: center; gap: 6px; color: var(--am); font-weight: 600;">
-                <span class="sync-dot local"></span> Local Storage Mode
-              </div>
-              <div style="font-size: 11.5px; margin-top: 4px; color: var(--ink-soft);">To sync across different phones, add your free Supabase credentials to <code>.env</code> (see <code>.env.example</code>).</div>
+              <button class="btn-tap-target after-sleep" id="btnAfterSleepTap">
+                Log & Notify
+              </button>
             `}
           </div>
 
-          <div class="btn-row" style="margin-top: 10px;">
-            <button class="btn primary" id="btnSaveSettings">Save settings</button>
+          ${afterLogged ? `
+            <div class="checkin-uncheck-hint">
+              Mistake? <button class="btn-uncheck" id="btnUncheckAfter">Un-check slot</button>
+            </div>
+          ` : ''}
+
+          <!-- After Sleep Routine Guide -->
+          <div class="guide-box">
+            <div class="guide-steps">
+              Wash <b>&rarr;</b> Azelaic acid 10% <b>&rarr;</b> Moisturizer <b>&rarr;</b> Sunscreen
+            </div>
+            <div class="guide-subtext">Consistent daily barrier defense & post-inflammatory care.</div>
+          </div>
+        </div>
+
+        <!-- Before Sleep Card -->
+        <div class="checkin-card before-sleep">
+          <div class="checkin-main">
+            <div class="checkin-info">
+              <div class="checkin-tag">Event 2</div>
+              <h2 class="checkin-title">Before Sleep</h2>
+              <div class="checkin-status ${beforeLogged ? 'logged' : ''}">
+                ${beforeLogged
+                  ? `✓ Logged at ${formatTime(openCycle.before_sleep_at)} (${openCycle.adapalene ? 'Adapalene' : 'Rest'})`
+                  : 'Pending check-in'
+                }
+              </div>
+            </div>
+            ${beforeLogged ? `
+              <button class="btn-tap-target checked" id="btnBeforeSleepDone">
+                ✓ Done
+              </button>
+            ` : `
+              <button class="btn-tap-target before-sleep" id="btnBeforeSleepTap">
+                Log & Notify
+              </button>
+            `}
+          </div>
+
+          ${beforeLogged ? `
+            <div class="checkin-uncheck-hint">
+              Mistake? <button class="btn-uncheck" id="btnUncheckBefore">Un-check slot</button>
+            </div>
+          ` : ''}
+
+          <!-- Live Adaptive Adapalene Guide (Feature 2) -->
+          <div class="guide-box">
+            <div class="guide-badge-row">
+              <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : 'rest'}">
+                ${escapeHtml(tonightPlan.badge)}
+              </span>
+              <span class="badge-pill phase">
+                ${escapeHtml(adapalenePhase.label)}
+              </span>
+            </div>
+            <div class="guide-steps">
+              ${escapeHtml(tonightPlan.instructions).replace(/→/g, '<b>&rarr;</b>')}
+            </div>
+            <div class="guide-subtext">
+              ${escapeHtml(tonightPlan.subtext)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual WhatsApp Nudge (Feature 5) -->
+      <button class="btn-whatsapp-manual" id="btnManualWhatsapp">
+        💬 Send Status Nudge via WhatsApp
+      </button>
+    ` : `
+      <!-- Partner Guidance Summary (Read-Only) -->
+      <div class="checkin-card before-sleep" style="margin-bottom: 24px;">
+        <div class="guide-badge-row">
+          <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : 'rest'}">
+            Tonight: ${escapeHtml(tonightPlan.badge)}
+          </span>
+          <span class="badge-pill phase">
+            ${escapeHtml(adapalenePhase.name)} (${adapalenePhase.count} nights)
+          </span>
+        </div>
+        <div class="guide-steps" style="margin-top: 8px;">
+          ${escapeHtml(tonightPlan.instructions).replace(/→/g, '<b>&rarr;</b>')}
+        </div>
+        <div class="guide-subtext">
+          ${escapeHtml(tonightPlan.subtext)}
+        </div>
+      </div>
+    `}
+
+    <!-- 60-Cycle Timeline Strip (Feature 4) -->
+    <div class="timeline-card">
+      <div class="timeline-header">
+        <h3 class="timeline-title">Cycle History</h3>
+        <span class="timeline-subtitle">Last ${timelineMarkers.length} cycles (oldest &rarr; newest)</span>
+      </div>
+
+      <div class="timeline-strip-container">
+        <div class="timeline-strip">
+          ${timelineMarkers.length === 0 ? `
+            <div style="font-size: 12px; color: var(--ink-soft); padding: 12px 0;">
+              No cycles logged yet. Check in to begin your streak!
+            </div>
+          ` : timelineMarkers.map((m, idx) => `
+            <div
+              class="cycle-marker ${selectedCycle && selectedCycle.id === m.id ? 'active' : ''}"
+              data-cycle-id="${m.id}"
+              title="Cycle #${m.cycleIndex}"
+            >
+              <div class="marker-half after-${m.afterState}"></div>
+              <div class="marker-half before-${m.beforeState}"></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Selected Cycle Tooltip Card -->
+      ${selectedCycle ? `
+        <div class="timeline-details-card">
+          <div class="timeline-details-title">
+            Cycle #${selectedCycle.cycleIndex} ${selectedCycle.isOpen ? '(Current Open Cycle)' : ''}
+          </div>
+          <div class="timeline-details-grid">
+            <div class="timeline-details-item">
+              <span class="lbl">After Sleep</span>
+              <span class="val">
+                ${selectedCycle.afterSleepAt ? formatDateTime(selectedCycle.afterSleepAt) : (selectedCycle.isOpen ? 'Pending' : 'Missed')}
+              </span>
+            </div>
+            <div class="timeline-details-item">
+              <span class="lbl">Before Sleep</span>
+              <span class="val">
+                ${selectedCycle.beforeSleepAt
+                  ? `${formatDateTime(selectedCycle.beforeSleepAt)} (${selectedCycle.adapalene ? 'Adapalene' : 'Rest'})`
+                  : (selectedCycle.isOpen ? 'Pending' : 'Missed')
+                }
+              </span>
+            </div>
           </div>
         </div>
       ` : ''}
-    </section>
 
-    <p class="privacy-note">
-      Your log uses shared storage, so anyone with this private link — like your accountability friend — can view it in real time and see exactly when you did morning and night routines. Keep this link private between you two.
-    </p>
+      <div class="timeline-legend">
+        <div class="legend-item">
+          <div class="legend-dot gold"></div>
+          <span>After Sleep Done</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot indigo"></div>
+          <span>Adapalene</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot sage"></div>
+          <span>Intentional Rest</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot brick"></div>
+          <span>Missed</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal (Owner Only, Feature 6) -->
+    ${(isOwner && state.settingsOpen) ? renderSettingsModal(tracker, storageState) : ''}
   `;
 
-  // Populate heatmap grid
-  const gridEl = document.getElementById('gridEl');
-  if (gridEl) {
-    cells.forEach((dStr) => {
-      const status = cellStatus(dStr, state.entries, t);
-      const cell = document.createElement('div');
-      cell.className = `cell ${status}` + (state.selectedCellDate === dStr ? ' selected' : '');
-      if (dStr) {
-        const details = cellDetails(dStr, state.entries, t);
-        const times = [];
-        if (details.amAt) times.push(`AM ${details.amAt}`);
-        if (details.pmAt) times.push(`PM ${details.pmAt}`);
-        cell.title = `${dStr}: ${status}${times.length ? ' (' + times.join(', ') + ')' : ''}`;
-
-        cell.addEventListener('click', () => {
-          state.selectedCellDate = state.selectedCellDate === dStr ? null : dStr;
-          render(false);
-        });
-      }
-      gridEl.appendChild(cell);
-    });
-  }
-
   // Attach event listeners
-  document.getElementById('btnAm')?.addEventListener('click', () => toggleSlot('am'));
-  document.getElementById('btnPm')?.addEventListener('click', () => toggleSlot('pm'));
-  document.getElementById('btnWhatsapp')?.addEventListener('click', () => {
-    openWhatsapp(waMessageNow(state.entries, t));
-  });
-  document.getElementById('btnShare')?.addEventListener('click', copyShareLink);
-  document.getElementById('btnSettings')?.addEventListener('click', () => {
-    state.settingsOpen = !state.settingsOpen;
-    render(false);
+  attachDashboardListeners(isOwner, tracker, cycles);
+}
+
+function renderSettingsModal(tracker, storageState) {
+  const partner = storageState.partner;
+  const activeInvites = storageState.activeInvites || [];
+  const inviteData = state.inviteLinkData;
+
+  return `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 class="modal-title">Settings</h2>
+          <button class="btn-icon" id="btnCloseSettings" aria-label="Close">✕</button>
+        </div>
+
+        <form id="settingsForm">
+          <div class="form-group">
+            <label class="form-label" for="inPartnerName">Partner's Display Name</label>
+            <input
+              type="text"
+              id="inPartnerName"
+              class="form-input"
+              placeholder="e.g. Sarah"
+              value="${escapeHtml(tracker?.partner_name || '')}"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inPartnerPhone">Partner's WhatsApp Number</label>
+            <input
+              type="tel"
+              id="inPartnerPhone"
+              class="form-input"
+              placeholder="e.g. +14155552671 or 919876543210"
+              value="${escapeHtml(tracker?.partner_phone || '')}"
+            />
+            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+              Kept strictly private on your owner record. Never visible to your partner's client.
+            </span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inNudgeThreshold">Nudge Threshold (Hours)</label>
+            <input
+              type="number"
+              id="inNudgeThreshold"
+              class="form-input"
+              min="1"
+              max="48"
+              value="${tracker?.nudge_threshold_hours || 14}"
+            />
+            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+              Shows an in-app banner when one half of a cycle has been open for longer than this.
+            </span>
+          </div>
+
+          <button type="submit" class="btn-primary" style="margin-top: 8px;">
+            Save Settings
+          </button>
+        </form>
+
+        <!-- Partner Invite Flow -->
+        <div class="modal-section">
+          <div class="modal-section-title">Accountability Partner Access</div>
+
+          ${partner ? `
+            <div style="font-size: 13px; color: var(--ink); margin-bottom: 10px;">
+              ✓ Partner connected since ${formatDateTime(partner.joined_at)}
+            </div>
+            ${state.confirmRevokeOpen ? `
+              <div class="confirm-box">
+                <div class="confirm-title">Revoke Partner Access?</div>
+                <div class="confirm-msg">They will immediately lose read access to your tracker log.</div>
+                <div class="confirm-actions">
+                  <button class="btn-danger" id="btnConfirmRevoke">Yes, Revoke</button>
+                  <button class="btn-secondary" id="btnCancelRevoke">Cancel</button>
+                </div>
+              </div>
+            ` : `
+              <button class="btn-danger" id="btnRevokePartner">
+                Revoke Partner Access
+              </button>
+            `}
+          ` : `
+            <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 12px;">
+              Invite an accountability partner to see your real-time log, streak, and timeline (read-only).
+            </p>
+            <button class="btn-secondary" id="btnGenerateInvite" style="width: 100%;">
+              + Generate 7-Day Single-Use Invite Link
+            </button>
+          `}
+
+          ${inviteData ? `
+            <div class="invite-box">
+              <div style="font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 4px;">
+                Single-Use Invite Link (Expires in 7 days):
+              </div>
+              <div class="invite-url-text">${escapeHtml(inviteData.inviteUrl)}</div>
+              <div class="invite-actions">
+                <button class="btn-secondary" id="btnCopyInvite">Copy Link</button>
+                <button class="btn-secondary" id="btnShareInviteWhatsApp">Send on WhatsApp</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+
+        <!-- In-App Reset Confirmation (Feature 6) -->
+        <div class="modal-section">
+          <div class="modal-section-title">Reset Cycle History</div>
+          <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 10px;">
+            Clears all logged cycles for this tracker. Resets your streak, missed counts, and restarts Adapalene at the build-up phase.
+          </p>
+
+          ${state.confirmResetOpen ? `
+            <div class="confirm-box">
+              <div class="confirm-title">Clear all cycles and restart streak?</div>
+              <div class="confirm-msg">This cannot be undone. All your past check-in logs will be permanently deleted.</div>
+              <div class="confirm-actions">
+                <button class="btn-danger" id="btnConfirmReset">Yes, Reset Everything</button>
+                <button class="btn-secondary" id="btnCancelReset">Cancel</button>
+              </div>
+            </div>
+          ` : `
+            <button class="btn-danger" id="btnOpenResetConfirm">
+              Reset Tracker History
+            </button>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function attachDashboardListeners(isOwner, tracker, cycles) {
+  // Sign out
+  document.getElementById('btnSignOut')?.addEventListener('click', handleSignOut);
+
+  // Settings trigger
+  document.getElementById('btnOpenSettings')?.addEventListener('click', () => {
+    state.settingsOpen = true;
+    render();
   });
 
+  // Timeline marker selection
+  document.querySelectorAll('.cycle-marker').forEach(el => {
+    el.addEventListener('click', () => {
+      const cycleId = el.getAttribute('data-cycle-id');
+      state.selectedCycleId = state.selectedCycleId === cycleId ? null : cycleId;
+      render();
+    });
+  });
+
+  if (!isOwner) return;
+
+  // Check-in buttons (Feature 1)
+  document.getElementById('btnAfterSleepTap')?.addEventListener('click', () => {
+    handleCheckInTap('afterSleep');
+  });
+
+  document.getElementById('btnBeforeSleepTap')?.addEventListener('click', () => {
+    handleCheckInTap('beforeSleep');
+  });
+
+  // Un-check buttons
+  document.getElementById('btnUncheckAfter')?.addEventListener('click', () => {
+    handleUnCheckInTap('afterSleep');
+  });
+
+  document.getElementById('btnUncheckBefore')?.addEventListener('click', () => {
+    handleUnCheckInTap('beforeSleep');
+  });
+
+  // Manual WhatsApp Nudge (Feature 5)
+  document.getElementById('btnManualWhatsapp')?.addEventListener('click', () => {
+    const msg = formatManualWhatsAppMessage(cycles);
+    openWhatsApp(tracker?.partner_phone, msg);
+  });
+
+  // Settings Modal Listeners
   if (state.settingsOpen) {
-    document.getElementById('btnSaveSettings')?.addEventListener('click', () => {
-      state.settings.friendName = (document.getElementById('inFriendName')?.value || '').trim();
-      state.settings.friendPhone = (document.getElementById('inFriendPhone')?.value || '').trim();
-      state.settings.amTime = document.getElementById('inAmTime')?.value || '08:00';
-      state.settings.pmTime = document.getElementById('inPmTime')?.value || '22:00';
-      state.settings.routineStartDate = document.getElementById('inStartDate')?.value || t;
+    document.getElementById('btnCloseSettings')?.addEventListener('click', () => {
+      state.settingsOpen = false;
+      state.confirmResetOpen = false;
+      state.confirmRevokeOpen = false;
+      render();
+    });
 
-      storage.save(state.entries, state.settings);
-      showToast('Settings saved successfully');
-      render(false);
+    document.getElementById('settingsForm')?.addEventListener('submit', handleSaveSettings);
+
+    document.getElementById('btnGenerateInvite')?.addEventListener('click', handleGenerateInvite);
+
+    if (state.inviteLinkData) {
+      document.getElementById('btnCopyInvite')?.addEventListener('click', () => {
+        handleCopyInviteLink(state.inviteLinkData.inviteUrl);
+      });
+
+      document.getElementById('btnShareInviteWhatsApp')?.addEventListener('click', () => {
+        const text = `Hey! Here's your invite link to be my accountability partner on Skin Streak: ${state.inviteLinkData.inviteUrl}`;
+        openWhatsApp(tracker?.partner_phone, text);
+      });
+    }
+
+    // Revoke partner confirmation
+    document.getElementById('btnRevokePartner')?.addEventListener('click', () => {
+      state.confirmRevokeOpen = true;
+      render();
+    });
+
+    document.getElementById('btnConfirmRevoke')?.addEventListener('click', handleRevokePartner);
+    document.getElementById('btnCancelRevoke')?.addEventListener('click', () => {
+      state.confirmRevokeOpen = false;
+      render();
+    });
+
+    // Reset confirmation
+    document.getElementById('btnOpenResetConfirm')?.addEventListener('click', () => {
+      state.confirmResetOpen = true;
+      render();
+    });
+
+    document.getElementById('btnConfirmReset')?.addEventListener('click', handleResetCycles);
+    document.getElementById('btnCancelReset')?.addEventListener('click', () => {
+      state.confirmResetOpen = false;
+      render();
     });
   }
 }
 
-// Initialize Application
-function init() {
-  storage = new StorageController(
-    state.slug,
-    // onDataChanged
-    (data, meta) => {
-      state.entries = data.entries || {};
-      state.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-
-      // Ensure routineStartDate defaults to today if never set
-      if (!state.settings.routineStartDate) {
-        state.settings.routineStartDate = todayStr();
-      }
-
-      state.loaded = true;
-      render(false);
-
-      if (meta && meta.source === 'supabase-realtime') {
-        showToast('Sync update received from friend');
-      }
-    },
-    // onStatusChanged
-    (statusObj) => {
-      state.syncStatus = statusObj;
-      if (state.loaded) {
-        render(false);
-      }
-    }
-  );
-
-  // Set initial data from storage cache
-  state.entries = storage.currentData.entries || {};
-  state.settings = { ...DEFAULT_SETTINGS, ...(storage.currentData.settings || {}) };
-  if (!state.settings.routineStartDate) {
-    state.settings.routineStartDate = todayStr();
-  }
-  state.loaded = true;
-  render(false);
-
-  // Re-check banner every minute
-  setInterval(() => {
-    const banner = checkBanner();
-    const existing = document.querySelector('.banner');
-    if (!!banner !== !!existing) {
-      render(false);
-    }
-  }, 60000);
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
-// Run when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
+// Start application
+window.addEventListener('DOMContentLoaded', initApp);

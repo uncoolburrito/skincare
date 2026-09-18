@@ -1,481 +1,530 @@
 /**
- * Skin Streak — Storage & Real-Time Synchronization Engine
- * Supports Supabase Realtime for instant multi-device sync,
- * with resilient fallback to localStorage and BroadcastChannel.
+ * Skin Streak v3 — Storage & Supabase Sync Engine
+ * Handles role discovery (Owner vs Partner), normalized cycles CRUD,
+ * Realtime WebSocket subscriptions, and partner invite management.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { supabase, redeemInvite, clearPendingInviteToken } from './auth.js';
+import { handleCheckIn, handleUnCheckIn, computeTonightPlan } from './cycles.js';
 
-const STORAGE_KEY_PREFIX = 'skinstreak_data_';
-const SLUG_STORAGE_KEY = 'skinstreak_last_slug';
-const SUPABASE_URL_KEY = 'skinstreak_supabase_url';
-const SUPABASE_ANON_KEY = 'skinstreak_supabase_anon_key';
-
-let supabaseClient = null;
-let realtimeChannel = null;
-let broadcastChannel = null;
-let currentSlug = null;
-let pollingInterval = null;
-
-// Default initial state
-export const DEFAULT_SETTINGS = {
-  friendName: '',
-  friendPhone: '',
-  amTime: '08:00',
-  pmTime: '22:00',
-  routineStartDate: ''
-};
-
-// The canonical tracker ID matching your deployed URL
-export const CANONICAL_TRACKER_ID = 'd5167ad2d258c91a';
-export const FALLBACK_TRACKER_ID = '4140b1a4566bc19b';
-
-/**
- * Extracts or returns the shared canonical tracker slug.
- * Prioritizes URL slug if explicitly provided, otherwise defaults to CANONICAL_TRACKER_ID.
- * Never generates a random orphaned ID that would cause existing data to disappear.
- */
-export function getOrCreateTrackerSlug() {
-  // Check path /t/<slug>
-  const pathMatch = window.location.pathname.match(/\/t\/([^/?#]+)/);
-  if (pathMatch && pathMatch[1] && pathMatch[1] !== 'default') {
-    currentSlug = pathMatch[1].trim();
-    localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
-    return currentSlug;
-  }
-
-  // Check hash #/t/<slug> or #<slug>
-  const hashMatch = window.location.hash.match(/(?:#\/t\/|#t=|^#)([^/?&]+)/);
-  if (hashMatch && hashMatch[1] && hashMatch[1] !== '/' && hashMatch[1] !== 'default') {
-    currentSlug = hashMatch[1].replace(/^#/, '').trim();
-    localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
-    return currentSlug;
-  }
-
-  // Check search param ?t=<slug>
-  const params = new URLSearchParams(window.location.search);
-  const paramSlug = params.get('t');
-  if (paramSlug && paramSlug !== 'default') {
-    currentSlug = paramSlug.trim();
-    localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
-    return currentSlug;
-  }
-
-  // Check saved slug in localStorage
-  const savedSlug = localStorage.getItem(SLUG_STORAGE_KEY);
-  if (savedSlug && savedSlug.length > 5) {
-    currentSlug = savedSlug;
-  } else {
-    // Default directly to the canonical shared log ID so no device ever gets an empty orphaned record!
-    currentSlug = CANONICAL_TRACKER_ID;
-    localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
-  }
-
-  // Maintain canonical hash in URL so sharing is seamless
-  const newHash = `#/t/${currentSlug}`;
-  if (window.location.hash !== newHash) {
-    window.history.replaceState(null, '', newHash);
-  }
-
-  return currentSlug;
-}
-
-/**
- * Returns full shareable URL for the friend
- */
-export function getShareableUrl(slug = currentSlug) {
-  const origin = window.location.origin;
-  const path = window.location.pathname.replace(/\/t\/[^/?#]+/, '');
-  return `${origin}${path}#/t/${slug}`;
-}
-
-function sanitizeAnonKey(raw) {
-  if (!raw) return '';
-  let str = String(raw).trim();
-  if (str.includes('\n') || str.includes('\r')) {
-    const lines = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
-    str = lines[0] || '';
-  }
-  if (str.includes(' ')) {
-    str = str.split(/\s+/)[0].trim();
-  }
-  const parts = str.split('.');
-  if (parts.length > 3) {
-    str = parts.slice(0, 3).join('.');
-  }
-  return str.trim();
-}
-
-function sanitizeUrl(raw) {
-  if (!raw) return '';
-  let str = String(raw).trim();
-  if (str.includes('\n') || str.includes('\r')) {
-    str = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean)[0] || '';
-  }
-  return str.replace(/\/+$/, '');
-}
-
-/**
- * Get active Supabase credentials (from localStorage or environment variables)
- */
-export function getSupabaseCredentials() {
-  const envUrl = import.meta.env?.VITE_SUPABASE_URL;
-  const envKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
-  const localUrl = localStorage.getItem(SUPABASE_URL_KEY);
-  const localKey = localStorage.getItem(SUPABASE_ANON_KEY);
-
-  const rawUrl = envUrl || localUrl || '';
-  const rawKey = envKey || localKey || '';
-
-  return {
-    url: sanitizeUrl(rawUrl),
-    anonKey: sanitizeAnonKey(rawKey),
-    isFromEnv: !!(envUrl && envKey)
-  };
-}
-
-export function getCallMeBotCredentials() {
-  const envPhone = import.meta.env?.VITE_CALLMEBOT_PHONE;
-  const envKey = import.meta.env?.VITE_CALLMEBOT_API_KEY;
-  const localPhone = localStorage.getItem('skinstreak_callmebot_phone');
-  const localKey = localStorage.getItem('skinstreak_callmebot_key');
-
-  return {
-    phone: (envPhone || localPhone || '').trim(),
-    apiKey: (envKey || localKey || '').trim()
-  };
-}
-
-export function saveSupabaseCredentials(url, key) {
-  if (url) {
-    localStorage.setItem(SUPABASE_URL_KEY, url.trim());
-  } else {
-    localStorage.removeItem(SUPABASE_URL_KEY);
-  }
-
-  if (key) {
-    localStorage.setItem(SUPABASE_ANON_KEY, key.trim());
-  } else {
-    localStorage.removeItem(SUPABASE_ANON_KEY);
-  }
-
-  // Reset client so it reconnects with new credentials
-  if (realtimeChannel) {
-    realtimeChannel.unsubscribe();
-    realtimeChannel = null;
-  }
-  supabaseClient = null;
-}
-
-/**
- * Load local data cache for this slug
- */
-function loadLocalData(slug) {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PREFIX + slug);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return {
-      entries: parsed.entries || {},
-      settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) }
-    };
-  } catch (e) {
-    return null;
-  }
-}
-
-/**
- * Save data to local cache
- */
-function saveLocalData(slug, data) {
-  try {
-    localStorage.setItem(STORAGE_KEY_PREFIX + slug, JSON.stringify(data));
-  } catch (e) {
-    console.warn('LocalStorage save failed:', e);
-  }
-}
-
-/**
- * Storage Controller initialization
- */
 export class StorageController {
-  constructor(slug, onDataChanged, onStatusChanged) {
-    this.slug = slug || getOrCreateTrackerSlug();
-    this.onDataChanged = onDataChanged || (() => {});
-    this.onStatusChanged = onStatusChanged || (() => {});
-    this.currentData = loadLocalData(this.slug) || {
-      entries: {},
-      settings: { ...DEFAULT_SETTINGS }
-    };
-
-    this.setupBroadcastChannel();
-    this.initSupabase();
-    this.setupVisibilityListener();
+  constructor() {
+    this.user = null;
+    this.tracker = null;
+    this.role = 'unknown'; // 'owner' | 'partner'
+    this.cycles = [];
+    this.partner = null; // linked partner record if owner
+    this.activeInvites = [];
+    this.realtimeChannel = null;
+    this.listeners = new Set();
   }
 
-  setupBroadcastChannel() {
-    try {
-      if ('BroadcastChannel' in window) {
-        broadcastChannel = new BroadcastChannel(`skinstreak_${this.slug}`);
-        broadcastChannel.onmessage = (event) => {
-          if (event.data && event.data.type === 'SYNC') {
-            this.currentData = event.data.payload;
-            saveLocalData(this.slug, this.currentData);
-            this.onDataChanged(this.currentData, { source: 'broadcast' });
-          }
-        };
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  notify() {
+    for (const listener of this.listeners) {
+      try {
+        listener(this.getState());
+      } catch (e) {
+        console.error('[StorageController] Listener error:', e);
       }
-    } catch (e) {
-      console.warn('BroadcastChannel setup error:', e);
     }
   }
 
-  setupVisibilityListener() {
-    // When user returns to tab, refresh from Supabase or local storage
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        this.fetchRemoteData(false);
-      }
-    });
+  getState() {
+    return {
+      user: this.user,
+      tracker: this.tracker,
+      role: this.role,
+      cycles: [...this.cycles],
+      partner: this.partner,
+      activeInvites: [...this.activeInvites]
+    };
   }
 
-  initSupabase() {
-    const { url, anonKey } = getSupabaseCredentials();
-
-    if (!url || !anonKey) {
-      this.onStatusChanged({
-        status: 'local',
-        provider: 'local',
-        message: 'Local offline sync (tabs synced). Connect Supabase in Settings for live multi-device sync.'
-      });
+  /**
+   * Initializes the session, identifies the tracker & role,
+   * handles pending invite token redemption if present,
+   * and loads all cycles.
+   */
+  async init(user, pendingInviteToken = null) {
+    this.user = user;
+    if (!user) {
+      this.role = 'unauthenticated';
+      this.tracker = null;
+      this.cycles = [];
+      this.cleanupRealtime();
+      this.notify();
       return;
     }
 
-    try {
-      supabaseClient = createClient(url, anonKey, {
-        auth: { persistSession: false },
-        realtime: { params: { eventsPerSecond: 10 } }
-      });
-
-      this.onStatusChanged({
-        status: 'connecting',
-        provider: 'supabase',
-        message: 'Connecting to Supabase Realtime…'
-      });
-
-      this.setupRealtimeSubscription();
-      this.fetchRemoteData(true);
-
-      // Start periodic poll (every 15s) as a resilient safety net
-      if (pollingInterval) clearInterval(pollingInterval);
-      pollingInterval = setInterval(() => this.fetchRemoteData(false), 15000);
-    } catch (err) {
-      console.error('Supabase init failed:', err);
-      this.onStatusChanged({
-        status: 'error',
-        provider: 'supabase',
-        message: 'Failed to connect to Supabase. Using local storage.'
-      });
-    }
-  }
-
-  setupRealtimeSubscription() {
-    if (!supabaseClient) return;
-
-    if (realtimeChannel) {
-      realtimeChannel.unsubscribe();
-      realtimeChannel = null;
-    }
-
-    try {
-      realtimeChannel = supabaseClient
-        .channel(`skin_streak_${this.slug}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'skin_streak_logs',
-            filter: `id=eq.${this.slug}`
-          },
-          (payload) => {
-            if (payload.new && payload.new.entries) {
-              const remoteEntries = payload.new.entries || {};
-              const remoteSettings = { ...DEFAULT_SETTINGS, ...(payload.new.settings || {}) };
-              
-              // Deep merge with current entries so past dates are never lost
-              const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
-
-              this.currentData = {
-                entries: mergedEntries,
-                settings: remoteSettings
-              };
-
-              saveLocalData(this.slug, this.currentData);
-              this.onDataChanged(this.currentData, { source: 'supabase-realtime' });
-            }
-          }
-        )
-        .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            this.onStatusChanged({
-              status: 'online',
-              provider: 'supabase',
-              message: 'Live Multi-Device Sync Active'
-            });
-          } else if (status === 'CHANNEL_ERROR') {
-            this.onStatusChanged({
-              status: 'warning',
-              provider: 'supabase',
-              message: 'Realtime channel error — polling fallback active'
-            });
-          }
-        });
-    } catch (e) {
-      console.warn('Realtime subscription error:', e);
-    }
-  }
-
-  async fetchRemoteData(isInitial = false) {
-    const { url, anonKey } = getSupabaseCredentials();
-    if (!url || !anonKey) return;
-
-    try {
-      // Direct standard fetch to Supabase REST endpoint (guaranteed to work across all origins and browsers)
-      const res = await fetch(`${url}/rest/v1/skin_streak_logs?select=*&order=updated_at.desc`, {
-        headers: {
-          apikey: anonKey,
-          Authorization: `Bearer ${anonKey}`
+    // 1. If there is a pending invite token, attempt redemption first
+    if (pendingInviteToken) {
+      console.log('[StorageController] Attempting invite redemption...');
+      try {
+        const result = await redeemInvite(pendingInviteToken);
+        if (result.success) {
+          console.log('[StorageController] Successfully redeemed invite for tracker:', result.tracker_id);
+          clearPendingInviteToken();
+        } else {
+          console.warn('[StorageController] Invite redemption notice:', result.error);
         }
-      });
+      } catch (e) {
+        console.error('[StorageController] Invite redemption exception:', e);
+      }
+    }
 
-      if (!res.ok) {
-        console.warn('Supabase REST fetch status:', res.status, res.statusText);
+    // 2. Discover user's role and tracker
+    await this.loadTrackerAndRole();
+
+    // 3. If user has a tracker, load its cycles & partner data, and setup Realtime
+    if (this.tracker) {
+      await this.loadCycles();
+      if (this.role === 'owner') {
+        await this.loadPartnerData();
+      }
+      this.setupRealtime();
+    }
+
+    this.notify();
+  }
+
+  /**
+   * Queries trackers_view to discover whether user is Owner or Partner
+   */
+  async loadTrackerAndRole() {
+    // Check if user is owner of any tracker
+    const { data: ownerTrackers, error: ownerErr } = await supabase
+      .from('trackers')
+      .select('*')
+      .eq('owner_id', this.user.id)
+      .limit(1);
+
+    if (ownerErr) {
+      console.warn('[StorageController] Error checking owner trackers:', ownerErr);
+    }
+
+    if (ownerTrackers && ownerTrackers.length > 0) {
+      this.tracker = ownerTrackers[0];
+      this.role = 'owner';
+      return;
+    }
+
+    // Check if user is partner of any tracker via tracker_partners
+    const { data: partnerLinks, error: partnerErr } = await supabase
+      .from('tracker_partners')
+      .select('tracker_id, joined_at')
+      .eq('partner_user_id', this.user.id)
+      .limit(1);
+
+    if (partnerErr) {
+      console.warn('[StorageController] Error checking partner links:', partnerErr);
+    }
+
+    if (partnerLinks && partnerLinks.length > 0) {
+      const trackerId = partnerLinks[0].tracker_id;
+      // Load tracker metadata via trackers_view (which securely hides partner_phone)
+      const { data: viewData, error: viewErr } = await supabase
+        .from('trackers_view')
+        .select('*')
+        .eq('id', trackerId)
+        .single();
+
+      if (!viewErr && viewData) {
+        this.tracker = viewData;
+        this.role = 'partner';
         return;
       }
+    }
 
-      const rows = await res.json();
-      if (Array.isArray(rows) && rows.length > 0) {
-        const matching = rows.find(r => r.id === this.slug);
-        const hasEntries = (r) => r && r.entries && Object.keys(r.entries).length > 0;
-        const populated = (matching && hasEntries(matching)) ? matching : rows.find(hasEntries);
-        const record = populated || matching || rows[0];
+    // First-time login and not an invited partner -> Automatically create their tracker!
+    console.log('[StorageController] First-time login: creating initial owner tracker...');
+    const { data: newTracker, error: createErr } = await supabase
+      .from('trackers')
+      .insert({
+        owner_id: this.user.id,
+        partner_name: '',
+        partner_phone: '',
+        nudge_threshold_hours: 14
+      })
+      .select()
+      .single();
 
-        if (record) {
-          const remoteEntries = record.entries || {};
-          const remoteSettings = { ...DEFAULT_SETTINGS, ...(record.settings || {}) };
-
-          // Deep merge local and remote so past dates are never dropped
-          const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
-
-          this.currentData = {
-            entries: mergedEntries,
-            settings: remoteSettings
-          };
-
-          saveLocalData(this.slug, this.currentData);
-          this.onDataChanged(this.currentData, { source: 'supabase-fetch' });
-        }
-      } else if (isInitial) {
-        // Record doesn't exist yet; push initial state
-        await this.pushRemoteData(this.currentData);
-      }
-    } catch (e) {
-      console.warn('Remote sync fetch failed:', e);
+    if (createErr) {
+      console.error('[StorageController] Failed to create tracker for user:', createErr);
+      this.tracker = null;
+      this.role = 'error';
+    } else {
+      this.tracker = newTracker;
+      this.role = 'owner';
     }
   }
 
-  async pushRemoteData(data) {
-    const { url, anonKey } = getSupabaseCredentials();
-    if (!url || !anonKey) return;
+  /**
+   * Loads all cycles for the current tracker ordered oldest to newest
+   */
+  async loadCycles() {
+    if (!this.tracker) return;
 
-    try {
-      let remoteEntries = {};
-      let remoteSettings = {};
+    const { data, error } = await supabase
+      .from('cycles')
+      .select('*')
+      .eq('tracker_id', this.tracker.id)
+      .order('created_at', { ascending: true });
 
-      try {
-        const checkRes = await fetch(`${url}/rest/v1/skin_streak_logs?select=entries,settings&id=eq.${this.slug}`, {
-          headers: {
-            apikey: anonKey,
-            Authorization: `Bearer ${anonKey}`
-          }
-        });
-        if (checkRes.ok) {
-          const checkRows = await checkRes.json();
-          if (checkRows && checkRows[0]) {
-            remoteEntries = checkRows[0].entries || {};
-            remoteSettings = checkRows[0].settings || {};
+    if (error) {
+      console.error('[StorageController] Error loading cycles:', error);
+      return;
+    }
+
+    this.cycles = data || [];
+  }
+
+  /**
+   * Loads linked partner and active invites (Owner only)
+   */
+  async loadPartnerData() {
+    if (!this.tracker || this.role !== 'owner') return;
+
+    // Load linked partner
+    const { data: partners, error: pErr } = await supabase
+      .from('tracker_partners')
+      .select('partner_user_id, joined_at')
+      .eq('tracker_id', this.tracker.id);
+
+    if (!pErr && partners && partners.length > 0) {
+      this.partner = partners[0];
+    } else {
+      this.partner = null;
+    }
+
+    // Load active invites
+    const { data: invites, error: iErr } = await supabase
+      .from('partner_invites')
+      .select('*')
+      .eq('tracker_id', this.tracker.id)
+      .is('used_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false });
+
+    if (!iErr && invites) {
+      this.activeInvites = invites;
+    }
+  }
+
+  /**
+   * Sets up Supabase Realtime WebSocket replication
+   */
+  setupRealtime() {
+    this.cleanupRealtime();
+    if (!this.tracker) return;
+
+    const trackerId = this.tracker.id;
+    this.realtimeChannel = supabase
+      .channel(`realtime:tracker:${trackerId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cycles', filter: `tracker_id=eq.${trackerId}` },
+        payload => {
+          this.handleRealtimeCycleChange(payload);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trackers', filter: `id=eq.${trackerId}` },
+        payload => {
+          if (payload.eventType === 'UPDATE') {
+            this.tracker = { ...this.tracker, ...payload.new };
+            // Ensure partner_phone is kept hidden if partner
+            if (this.role === 'partner') {
+              this.tracker.partner_phone = null;
+            }
+            this.notify();
           }
         }
-      } catch (err) {
-        // ignore check error
-      }
-
-      // Merge: every past logged date stays permanently logged!
-      const mergedEntries = { ...remoteEntries, ...(data.entries || {}) };
-      const mergedSettings = { ...DEFAULT_SETTINGS, ...remoteSettings, ...(data.settings || {}) };
-
-      const res = await fetch(`${url}/rest/v1/skin_streak_logs`, {
-        method: 'POST',
-        headers: {
-          apikey: anonKey,
-          Authorization: `Bearer ${anonKey}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify({
-          id: this.slug,
-          entries: mergedEntries,
-          settings: mergedSettings,
-          updated_at: new Date().toISOString()
-        })
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tracker_partners', filter: `tracker_id=eq.${trackerId}` },
+        payload => {
+          if (payload.eventType === 'DELETE') {
+            if (this.role === 'partner' && payload.old.partner_user_id === this.user.id) {
+              // Partner access was revoked by the Owner
+              this.role = 'revoked';
+              this.cycles = [];
+              this.notify();
+              return;
+            }
+            if (this.role === 'owner') {
+              this.partner = null;
+              this.notify();
+            }
+          } else if (payload.eventType === 'INSERT' && this.role === 'owner') {
+            this.partner = payload.new;
+            this.notify();
+          }
+        }
+      )
+      .subscribe(status => {
+        console.log('[StorageController] Realtime status:', status);
       });
+  }
 
-      if (!res.ok) {
-        console.warn('Supabase REST upsert status:', res.status);
+  handleRealtimeCycleChange(payload) {
+    if (payload.eventType === 'INSERT') {
+      const exists = this.cycles.some(c => c.id === payload.new.id);
+      if (!exists) {
+        this.cycles = [...this.cycles, payload.new].sort(
+          (a, b) => new Date(a.created_at) - new Date(b.created_at)
+        );
+        this.notify();
       }
-    } catch (e) {
-      console.warn('Supabase push failed:', e);
+    } else if (payload.eventType === 'UPDATE') {
+      this.cycles = this.cycles.map(c => (c.id === payload.new.id ? payload.new : c));
+      this.notify();
+    } else if (payload.eventType === 'DELETE') {
+      this.cycles = this.cycles.filter(c => c.id !== payload.old.id);
+      this.notify();
     }
   }
 
-  async save(entries, settings) {
-    // Merge: ensure existing entries are never lost
-    const mergedEntries = { ...(this.currentData.entries || {}), ...(entries || {}) };
-    const mergedSettings = { ...(this.currentData.settings || {}), ...(settings || {}) };
-
-    this.currentData = {
-      entries: mergedEntries,
-      settings: mergedSettings
-    };
-
-    // 1. Immediately save to localStorage (0ms latency)
-    saveLocalData(this.slug, this.currentData);
-
-    // 2. Broadcast to other open tabs
-    if (broadcastChannel) {
-      try {
-        broadcastChannel.postMessage({
-          type: 'SYNC',
-          payload: this.currentData
-        });
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    // 3. Trigger local UI callback
-    this.onDataChanged(this.currentData, { source: 'local-save' });
-
-    // 4. Push to Supabase if connected
-    if (supabaseClient) {
-      await this.pushRemoteData(this.currentData);
+  cleanupRealtime() {
+    if (this.realtimeChannel) {
+      supabase.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
     }
   }
 
-  destroy() {
-    if (pollingInterval) clearInterval(pollingInterval);
-    if (realtimeChannel) realtimeChannel.unsubscribe();
-    if (broadcastChannel) broadcastChannel.close();
+  // ===========================================================================
+  // Owner Actions
+  // ===========================================================================
+
+  /**
+   * Check in a slot ('afterSleep' | 'beforeSleep')
+   */
+  async checkIn(type) {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can record check-ins.');
+    }
+
+    const timestamp = new Date().toISOString();
+    const result = handleCheckIn(this.cycles, type, {
+      tracker_id: this.tracker.id,
+      timestamp
+    });
+
+    if (result.action === 'created') {
+      // Optimistic update
+      this.cycles = result.updatedCycles;
+      this.notify();
+
+      // Persist to Supabase
+      const { data, error } = await supabase
+        .from('cycles')
+        .insert({
+          tracker_id: this.tracker.id,
+          after_sleep_at: result.cycle.after_sleep_at,
+          before_sleep_at: result.cycle.before_sleep_at,
+          adapalene: result.cycle.adapalene,
+          created_at: timestamp
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[StorageController] Failed to insert cycle:', error);
+        await this.loadCycles();
+        this.notify();
+        throw error;
+      }
+
+      // Replace temp id with real db id
+      this.cycles = this.cycles.map(c => (c.id === result.cycle.id ? data : c));
+      this.notify();
+      return data;
+    } else if (result.action === 'updated') {
+      // Optimistic update
+      this.cycles = result.updatedCycles;
+      this.notify();
+
+      const { data, error } = await supabase
+        .from('cycles')
+        .update({
+          after_sleep_at: result.cycle.after_sleep_at,
+          before_sleep_at: result.cycle.before_sleep_at,
+          adapalene: result.cycle.adapalene
+        })
+        .eq('id', result.cycle.id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[StorageController] Failed to update cycle:', error);
+        await this.loadCycles();
+        this.notify();
+        throw error;
+      }
+
+      return data;
+    }
+  }
+
+  /**
+   * Un-check a slot to correct a mistake (no WhatsApp triggered)
+   */
+  async unCheckIn(type) {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can edit check-ins.');
+    }
+
+    const result = handleUnCheckIn(this.cycles, type);
+    this.cycles = result.updatedCycles;
+    this.notify();
+
+    const changed = result.changedCycle;
+    if (!changed) return;
+
+    if (changed.deleted) {
+      const { error } = await supabase
+        .from('cycles')
+        .delete()
+        .eq('id', changed.id);
+      if (error) {
+        console.error('[StorageController] Error deleting cycle:', error);
+        await this.loadCycles();
+        this.notify();
+      }
+    } else {
+      const { error } = await supabase
+        .from('cycles')
+        .update({
+          after_sleep_at: changed.after_sleep_at,
+          before_sleep_at: changed.before_sleep_at,
+          adapalene: changed.adapalene
+        })
+        .eq('id', changed.id);
+      if (error) {
+        console.error('[StorageController] Error updating cycle on uncheck:', error);
+        await this.loadCycles();
+        this.notify();
+      }
+    }
+  }
+
+  /**
+   * Updates tracker settings
+   */
+  async updateSettings({ partner_name, partner_phone, nudge_threshold_hours }) {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can update settings.');
+    }
+
+    const updates = {};
+    if (partner_name !== undefined) updates.partner_name = partner_name;
+    if (partner_phone !== undefined) updates.partner_phone = partner_phone;
+    if (nudge_threshold_hours !== undefined) updates.nudge_threshold_hours = Number(nudge_threshold_hours);
+
+    const { data, error } = await supabase
+      .from('trackers')
+      .update(updates)
+      .eq('id', this.tracker.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[StorageController] Error updating tracker settings:', error);
+      throw error;
+    }
+
+    this.tracker = data;
+    this.notify();
+    return data;
+  }
+
+  /**
+   * Generates a single-use 7-day invite token and returns the invite link
+   */
+  async createInvite() {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can create invite links.');
+    }
+
+    // Generate random 32-character hex token
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    const token = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+
+    const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+
+    const { data, error } = await supabase
+      .from('partner_invites')
+      .insert({
+        tracker_id: this.tracker.id,
+        token,
+        expires_at: expiresAt
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[StorageController] Error creating invite:', error);
+      throw error;
+    }
+
+    this.activeInvites.unshift(data);
+    this.notify();
+
+    const origin = window.location.origin;
+    const path = window.location.pathname.replace(/\/+$/, '');
+    const inviteUrl = `${origin}${path}#/join/${token}`;
+    return { token, expiresAt, inviteUrl };
+  }
+
+  /**
+   * Revokes the current partner's access
+   */
+  async revokePartner() {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can revoke partner access.');
+    }
+
+    const { error } = await supabase
+      .from('tracker_partners')
+      .delete()
+      .eq('tracker_id', this.tracker.id);
+
+    if (error) {
+      console.error('[StorageController] Error revoking partner:', error);
+      throw error;
+    }
+
+    this.partner = null;
+    this.notify();
+  }
+
+  /**
+   * Resets all cycles for this tracker.
+   * Clears streak, misses, and resets Adapalene phase to build-up (count 0).
+   */
+  async resetCycles() {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can reset cycle history.');
+    }
+
+    const { error } = await supabase
+      .from('cycles')
+      .delete()
+      .eq('tracker_id', this.tracker.id);
+
+    if (error) {
+      console.error('[StorageController] Error resetting cycles:', error);
+      throw error;
+    }
+
+    this.cycles = [];
+    this.notify();
   }
 }
