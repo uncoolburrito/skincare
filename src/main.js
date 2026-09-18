@@ -419,7 +419,6 @@ function init() {
       // Ensure routineStartDate defaults to today if never set
       if (!state.settings.routineStartDate) {
         state.settings.routineStartDate = todayStr();
-        storage.save(state.entries, state.settings);
       }
 
       state.loaded = true;

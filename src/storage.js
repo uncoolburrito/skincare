@@ -89,6 +89,32 @@ export function getShareableUrl(slug = currentSlug) {
   return `${origin}${path}#/t/${slug}`;
 }
 
+function sanitizeAnonKey(raw) {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  if (str.includes('\n') || str.includes('\r')) {
+    const lines = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
+    str = lines[0] || '';
+  }
+  if (str.includes(' ')) {
+    str = str.split(/\s+/)[0].trim();
+  }
+  const parts = str.split('.');
+  if (parts.length > 3) {
+    str = parts.slice(0, 3).join('.');
+  }
+  return str.trim();
+}
+
+function sanitizeUrl(raw) {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  if (str.includes('\n') || str.includes('\r')) {
+    str = str.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean)[0] || '';
+  }
+  return str.replace(/\/+$/, '');
+}
+
 /**
  * Get active Supabase credentials (from localStorage or environment variables)
  */
@@ -98,9 +124,12 @@ export function getSupabaseCredentials() {
   const localUrl = localStorage.getItem(SUPABASE_URL_KEY);
   const localKey = localStorage.getItem(SUPABASE_ANON_KEY);
 
+  const rawUrl = envUrl || localUrl || '';
+  const rawKey = envKey || localKey || '';
+
   return {
-    url: (envUrl || localUrl || '').trim(),
-    anonKey: (envKey || localKey || '').trim(),
+    url: sanitizeUrl(rawUrl),
+    anonKey: sanitizeAnonKey(rawKey),
     isFromEnv: !!(envUrl && envKey)
   };
 }
