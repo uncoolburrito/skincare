@@ -37,7 +37,6 @@ const state = {
   loaded: false,
   settingsOpen: false,
   cloudSettingsOpen: false,
-  resetConfirm: false,
   selectedCellDate: null,
   syncStatus: { status: 'local', provider: 'local', message: 'Initializing…' }
 };
@@ -346,24 +345,9 @@ function render(pulse = false) {
             `}
           </div>
 
-          <div class="btn-row" style="margin-top: 6px;">
+          <div class="btn-row" style="margin-top: 10px;">
             <button class="btn primary" id="btnSaveSettings">Save settings</button>
           </div>
-
-          <div class="settings-section-title" style="color: var(--miss); margin-top: 14px;">Danger Zone</div>
-          ${state.resetConfirm ? `
-            <div class="reset-confirm-card">
-              <p>Are you sure? This will wipe all logged entries and restart your adapalene cycle at day one.</p>
-              <div class="btn-row">
-                <button class="btn danger-solid" id="btnResetConfirm">Yes, erase everything</button>
-                <button class="btn" id="btnResetCancel">Cancel</button>
-              </div>
-            </div>
-          ` : `
-            <div class="btn-row">
-              <button class="btn danger" id="btnReset">Reset all data</button>
-            </div>
-          `}
         </div>
       ` : ''}
     </section>
@@ -420,27 +404,6 @@ function render(pulse = false) {
       showToast('Settings saved successfully');
       render(false);
     });
-
-    if (state.resetConfirm) {
-      document.getElementById('btnResetConfirm')?.addEventListener('click', () => {
-        state.entries = {};
-        state.settings.routineStartDate = todayStr();
-        state.resetConfirm = false;
-        state.selectedCellDate = null;
-        storage.save(state.entries, state.settings);
-        showToast('Log reset — today is day one');
-        render(false);
-      });
-      document.getElementById('btnResetCancel')?.addEventListener('click', () => {
-        state.resetConfirm = false;
-        render(false);
-      });
-    } else {
-      document.getElementById('btnReset')?.addEventListener('click', () => {
-        state.resetConfirm = true;
-        render(false);
-      });
-    }
   }
 }
 

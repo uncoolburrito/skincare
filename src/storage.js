@@ -26,22 +26,27 @@ export const DEFAULT_SETTINGS = {
   routineStartDate: ''
 };
 
+// The canonical tracker ID where your shared habit data is permanently stored.
+export const CANONICAL_TRACKER_ID = '4140b1a4566bc19b';
+
 /**
- * Extracts or generates the unguessable tracker slug from the current URL.
+ * Extracts or returns the shared canonical tracker slug.
+ * Prioritizes URL slug if explicitly provided, otherwise defaults to CANONICAL_TRACKER_ID.
+ * Never generates a random orphaned ID that would cause existing data to disappear.
  */
 export function getOrCreateTrackerSlug() {
   // Check path /t/<slug>
   const pathMatch = window.location.pathname.match(/\/t\/([^/?#]+)/);
-  if (pathMatch && pathMatch[1]) {
-    currentSlug = pathMatch[1];
+  if (pathMatch && pathMatch[1] && pathMatch[1] !== 'default') {
+    currentSlug = pathMatch[1].trim();
     localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
     return currentSlug;
   }
 
   // Check hash #/t/<slug> or #<slug>
   const hashMatch = window.location.hash.match(/(?:#\/t\/|#t=|^#)([^/?&]+)/);
-  if (hashMatch && hashMatch[1] && hashMatch[1] !== '/') {
-    currentSlug = hashMatch[1].replace(/^#/, '');
+  if (hashMatch && hashMatch[1] && hashMatch[1] !== '/' && hashMatch[1] !== 'default') {
+    currentSlug = hashMatch[1].replace(/^#/, '').trim();
     localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
     return currentSlug;
   }
@@ -49,25 +54,23 @@ export function getOrCreateTrackerSlug() {
   // Check search param ?t=<slug>
   const params = new URLSearchParams(window.location.search);
   const paramSlug = params.get('t');
-  if (paramSlug) {
-    currentSlug = paramSlug;
+  if (paramSlug && paramSlug !== 'default') {
+    currentSlug = paramSlug.trim();
     localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
     return currentSlug;
   }
 
   // Check saved slug in localStorage
   const savedSlug = localStorage.getItem(SLUG_STORAGE_KEY);
-  if (savedSlug) {
+  if (savedSlug && savedSlug.length > 5) {
     currentSlug = savedSlug;
   } else {
-    // Generate an unguessable 16-character random hex slug
-    const array = new Uint8Array(8);
-    crypto.getRandomValues(array);
-    currentSlug = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+    // Default directly to the canonical shared log ID so no device ever gets an empty orphaned record!
+    currentSlug = CANONICAL_TRACKER_ID;
     localStorage.setItem(SLUG_STORAGE_KEY, currentSlug);
   }
 
-  // Update hash in URL so the user can easily share/copy it
+  // Maintain canonical hash in URL so sharing is seamless
   const newHash = `#/t/${currentSlug}`;
   if (window.location.hash !== newHash) {
     window.history.replaceState(null, '', newHash);
@@ -270,8 +273,11 @@ export class StorageController {
               const remoteEntries = payload.new.entries || {};
               const remoteSettings = { ...DEFAULT_SETTINGS, ...(payload.new.settings || {}) };
               
+              // Deep merge with current entries so past dates are never lost
+              const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
+
               this.currentData = {
-                entries: remoteEntries,
+                entries: mergedEntries,
                 settings: remoteSettings
               };
 
@@ -319,15 +325,18 @@ export class StorageController {
         const remoteEntries = data.entries || {};
         const remoteSettings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
 
+        // Deep merge local and remote so nothing is dropped
+        const mergedEntries = { ...(this.currentData.entries || {}), ...remoteEntries };
+
         this.currentData = {
-          entries: remoteEntries,
+          entries: mergedEntries,
           settings: remoteSettings
         };
 
         saveLocalData(this.slug, this.currentData);
         this.onDataChanged(this.currentData, { source: 'supabase-fetch' });
       } else if (isInitial) {
-        // Record doesn't exist yet for this slug; push initial local state
+        // Record doesn't exist yet for this slug; push initial state
         await this.pushRemoteData(this.currentData);
       }
     } catch (e) {
@@ -339,12 +348,26 @@ export class StorageController {
     if (!supabaseClient) return;
 
     try {
+      // First fetch latest remote data to merge past entries so nothing is ever overwritten
+      const { data: existing } = await supabaseClient
+        .from('skin_streak_logs')
+        .select('entries, settings')
+        .eq('id', this.slug)
+        .maybeSingle();
+
+      const remoteEntries = (existing && existing.entries) || {};
+      const remoteSettings = (existing && existing.settings) || {};
+
+      // Merge: every past logged date stays permanently logged!
+      const mergedEntries = { ...remoteEntries, ...(data.entries || {}) };
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...remoteSettings, ...(data.settings || {}) };
+
       const { error } = await supabaseClient
         .from('skin_streak_logs')
         .upsert({
           id: this.slug,
-          entries: data.entries || {},
-          settings: data.settings || {},
+          entries: mergedEntries,
+          settings: mergedSettings,
           updated_at: new Date().toISOString()
         });
 
@@ -357,9 +380,13 @@ export class StorageController {
   }
 
   async save(entries, settings) {
+    // Merge: ensure existing entries are never lost
+    const mergedEntries = { ...(this.currentData.entries || {}), ...(entries || {}) };
+    const mergedSettings = { ...(this.currentData.settings || {}), ...(settings || {}) };
+
     this.currentData = {
-      entries: entries || {},
-      settings: settings || { ...DEFAULT_SETTINGS }
+      entries: mergedEntries,
+      settings: mergedSettings
     };
 
     // 1. Immediately save to localStorage (0ms latency)
