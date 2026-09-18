@@ -337,20 +337,25 @@ export class StorageController {
   }
 
   async fetchRemoteData(isInitial = false) {
-    if (!supabaseClient) return;
+    const { url, anonKey } = getSupabaseCredentials();
+    if (!url || !anonKey) return;
 
     try {
-      const { data: rows, error } = await supabaseClient
-        .from('skin_streak_logs')
-        .select('*')
-        .order('updated_at', { ascending: false });
+      // Direct standard fetch to Supabase REST endpoint (guaranteed to work across all origins and browsers)
+      const res = await fetch(`${url}/rest/v1/skin_streak_logs?select=*&order=updated_at.desc`, {
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`
+        }
+      });
 
-      if (error) {
-        console.warn('Supabase fetch error:', error);
+      if (!res.ok) {
+        console.warn('Supabase REST fetch status:', res.status, res.statusText);
         return;
       }
 
-      if (rows && rows.length > 0) {
+      const rows = await res.json();
+      if (Array.isArray(rows) && rows.length > 0) {
         const matching = rows.find(r => r.id === this.slug);
         const hasEntries = (r) => r && r.entries && Object.keys(r.entries).length > 0;
         const populated = (matching && hasEntries(matching)) ? matching : rows.find(hasEntries);
@@ -381,33 +386,53 @@ export class StorageController {
   }
 
   async pushRemoteData(data) {
-    if (!supabaseClient) return;
+    const { url, anonKey } = getSupabaseCredentials();
+    if (!url || !anonKey) return;
 
     try {
-      const { data: rows } = await supabaseClient
-        .from('skin_streak_logs')
-        .select('entries, settings')
-        .eq('id', this.slug);
+      let remoteEntries = {};
+      let remoteSettings = {};
 
-      const existing = rows && rows[0];
-      const remoteEntries = (existing && existing.entries) || {};
-      const remoteSettings = (existing && existing.settings) || {};
+      try {
+        const checkRes = await fetch(`${url}/rest/v1/skin_streak_logs?select=entries,settings&id=eq.${this.slug}`, {
+          headers: {
+            apikey: anonKey,
+            Authorization: `Bearer ${anonKey}`
+          }
+        });
+        if (checkRes.ok) {
+          const checkRows = await checkRes.json();
+          if (checkRows && checkRows[0]) {
+            remoteEntries = checkRows[0].entries || {};
+            remoteSettings = checkRows[0].settings || {};
+          }
+        }
+      } catch (err) {
+        // ignore check error
+      }
 
       // Merge: every past logged date stays permanently logged!
       const mergedEntries = { ...remoteEntries, ...(data.entries || {}) };
       const mergedSettings = { ...DEFAULT_SETTINGS, ...remoteSettings, ...(data.settings || {}) };
 
-      const { error } = await supabaseClient
-        .from('skin_streak_logs')
-        .upsert({
+      const res = await fetch(`${url}/rest/v1/skin_streak_logs`, {
+        method: 'POST',
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${anonKey}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({
           id: this.slug,
           entries: mergedEntries,
           settings: mergedSettings,
           updated_at: new Date().toISOString()
-        });
+        })
+      });
 
-      if (error) {
-        console.warn('Supabase upsert error:', error);
+      if (!res.ok) {
+        console.warn('Supabase REST upsert status:', res.status);
       }
     } catch (e) {
       console.warn('Supabase push failed:', e);
