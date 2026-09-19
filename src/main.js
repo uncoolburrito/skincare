@@ -554,14 +554,25 @@ function renderAuthScreen() {
             </div>
             <div class="form-group">
               <label class="form-label" for="authPasswordInput">Password</label>
-              <input
-                type="password"
-                id="authPasswordInput"
-                class="form-input"
-                placeholder="••••••••"
-                required
-                autocomplete="current-password"
-              />
+              <div class="password-input-wrapper">
+                <input
+                  type="password"
+                  id="authPasswordInput"
+                  class="form-input"
+                  placeholder="••••••••"
+                  required
+                  autocomplete="current-password"
+                />
+                <button
+                  type="button"
+                  id="btnTogglePassword"
+                  class="btn-toggle-password"
+                  title="Show password"
+                  aria-label="Show password"
+                >
+                  👁️
+                </button>
+              </div>
             </div>
             <div style="display: flex; gap: 10px; margin-top: 8px;">
               <button type="submit" id="btnPasswordSignIn" class="btn-primary" style="flex: 1;">
@@ -614,6 +625,18 @@ function renderAuthScreen() {
   if (isPassword) {
     document.getElementById('authPasswordForm')?.addEventListener('submit', (e) => handlePasswordAuth(e, false));
     document.getElementById('btnPasswordSignUp')?.addEventListener('click', (e) => handlePasswordAuth(e, true));
+
+    const toggleBtn = document.getElementById('btnTogglePassword');
+    const pwdInput = document.getElementById('authPasswordInput');
+    toggleBtn?.addEventListener('click', () => {
+      if (!pwdInput) return;
+      const isCurrentlyPassword = pwdInput.type === 'password';
+      pwdInput.type = isCurrentlyPassword ? 'text' : 'password';
+      toggleBtn.textContent = isCurrentlyPassword ? '🙈' : '👁️';
+      toggleBtn.title = isCurrentlyPassword ? 'Hide password' : 'Show password';
+      toggleBtn.setAttribute('aria-label', isCurrentlyPassword ? 'Hide password' : 'Show password');
+      pwdInput.focus();
+    });
   } else {
     document.getElementById('authMagicForm')?.addEventListener('submit', handleSendMagicLink);
   }

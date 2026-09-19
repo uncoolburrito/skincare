@@ -1054,6 +1054,42 @@ header h1 {
   border-color: var(--ink);
 }
 
+.password-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.password-input-wrapper .form-input {
+  padding-right: 42px;
+}
+
+.btn-toggle-password {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 6px 8px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  user-select: none;
+}
+
+.btn-toggle-password:hover {
+  color: var(--ink);
+  background: rgba(42, 36, 32, 0.06);
+}
+
 .btn-primary {
   width: 100%;
   padding: 13px;
