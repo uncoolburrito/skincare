@@ -244,7 +244,8 @@ security definer
 set search_path = public, auth, pg_temp
 as $$
 declare
-  v_invite record;
+  v_invite_id uuid;
+  v_tracker_id uuid;
   v_tracker record;
   v_user_id uuid;
 begin
@@ -253,47 +254,43 @@ begin
     return jsonb_build_object('success', false, 'error', 'Authentication required. Please log in first.');
   end if;
 
-  -- 1. Find invite
-  select * into v_invite
-  from public.partner_invites
-  where token = trim(invite_token);
+  -- 1. Atomically claim the token first to eliminate race conditions
+  update public.partner_invites
+  set used_at = now()
+  where token = trim(invite_token)
+    and used_at is null
+    and expires_at > now()
+  returning id, tracker_id into v_invite_id, v_tracker_id;
 
-  if not found then
-    return jsonb_build_object('success', false, 'error', 'Invalid invite link.');
+  if v_invite_id is null then
+    return jsonb_build_object(
+      'success', false,
+      'error', 'This invite link is invalid, already used, or expired.'
+    );
   end if;
 
-  -- 2. Validate unredeemed
-  if v_invite.used_at is not null then
-    return jsonb_build_object('success', false, 'error', 'This invite link has already been used.');
-  end if;
-
-  -- 3. Validate unexpired
-  if v_invite.expires_at < now() then
-    return jsonb_build_object('success', false, 'error', 'This invite link has expired (7 day validity).');
-  end if;
-
-  -- 4. Check tracker & prevent self-invite
+  -- 2. Fetch tracker & prevent self-invite
   select * into v_tracker
   from public.trackers
-  where id = v_invite.tracker_id;
+  where id = v_tracker_id;
 
   if v_tracker.owner_id = v_user_id then
+    -- Reset used_at so the owner does not accidentally burn their own invite link
+    update public.partner_invites
+    set used_at = null
+    where id = v_invite_id;
+
     return jsonb_build_object('success', false, 'error', 'You cannot accept an invite to your own tracker.');
   end if;
 
-  -- 5. Add partner membership atomically
+  -- 3. Add partner membership atomically
   insert into public.tracker_partners (tracker_id, partner_user_id)
-  values (v_invite.tracker_id, v_user_id)
+  values (v_tracker_id, v_user_id)
   on conflict (tracker_id, partner_user_id) do nothing;
-
-  -- 6. Mark invite as used
-  update public.partner_invites
-  set used_at = now()
-  where id = v_invite.id;
 
   return jsonb_build_object(
     'success', true,
-    'tracker_id', v_invite.tracker_id,
+    'tracker_id', v_tracker_id,
     'partner_name', v_tracker.partner_name
   );
 end;
@@ -335,3 +332,10 @@ begin
     alter publication supabase_realtime add table public.tracker_partners;
   end if;
 end $$;
+
+-- ==============================================================================
+-- 5. Legacy Migration Documentation Note
+-- Source: Legacy single-row key-value table `skin_streak_logs` (id: 'd5167ad2d258c91a').
+-- Note on `adapalene` values: PM routine records (e.g. Sept 18 PM) have `adapalene = true`
+-- based on owner-verified night check-ins during the build-up phase.
+-- ==============================================================================

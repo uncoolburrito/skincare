@@ -16,6 +16,8 @@ export class StorageController {
     this.partner = null; // linked partner record if owner
     this.activeInvites = [];
     this.realtimeChannel = null;
+    this.partnerPollInterval = null;
+    this.visibilityHandler = null;
     this.listeners = new Set();
   }
 
@@ -201,13 +203,16 @@ export class StorageController {
   }
 
   /**
-   * Automatically migrates legacy check-in logs from skin_streak_logs into the new cycles table
+   * Automatically migrates legacy check-in logs from skin_streak_logs into the new cycles table.
+   * Note on `adapalene` values: PM entries from skin_streak_logs (id 'd5167ad2d258c91a',
+   * specifically Sept 18 PM) have adapalene = true based on owner-verified night routine logs.
    */
   async autoMigrateLegacyLogs() {
     if (!this.tracker || this.role !== 'owner' || this.cycles.length > 0) return;
 
     try {
       console.log('[StorageController] Checking for legacy logs to migrate...');
+      // Data origin: legacy single-row store with id 'd5167ad2d258c91a'
       const { data: legacy, error } = await supabase
         .from('skin_streak_logs')
         .select('*')
@@ -359,6 +364,56 @@ export class StorageController {
       .subscribe(status => {
         console.log('[StorageController] Realtime status:', status);
       });
+
+    // Partner fallback for settings changes (Fix 3):
+    // Base table `trackers` SELECT is owner-only to protect `partner_phone`.
+    // Since Supabase Realtime does not support postgres_changes on views (`trackers_view`),
+    // partner client periodically polls and refreshes on visibility focus.
+    if (this.role === 'partner') {
+      this.partnerPollInterval = setInterval(() => {
+        this.refetchTrackerSettings();
+      }, 60000);
+
+      this.visibilityHandler = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          this.refetchTrackerSettings();
+        }
+      };
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', this.visibilityHandler);
+      }
+    }
+  }
+
+  /**
+   * Refetches tracker settings from trackers_view for Partner view (Fix 3).
+   * Keeps partner_name and nudge_threshold_hours fresh without exposing partner_phone.
+   */
+  async refetchTrackerSettings() {
+    if (!this.tracker || this.role !== 'partner') return;
+    try {
+      const { data, error } = await supabase
+        .from('trackers_view')
+        .select('*')
+        .eq('id', this.tracker.id)
+        .maybeSingle();
+
+      if (!error && data) {
+        let changed = false;
+        if (
+          this.tracker.partner_name !== data.partner_name ||
+          this.tracker.nudge_threshold_hours !== data.nudge_threshold_hours
+        ) {
+          changed = true;
+        }
+        this.tracker = { ...this.tracker, ...data, partner_phone: null };
+        if (changed) {
+          this.notify();
+        }
+      }
+    } catch (e) {
+      console.warn('[StorageController] Failed to refetch partner settings:', e);
+    }
   }
 
   handleRealtimeCycleChange(payload) {
@@ -377,12 +432,25 @@ export class StorageController {
       this.cycles = this.cycles.filter(c => c.id !== payload.old.id);
       this.notify();
     }
+
+    // Whenever cycles are modified, also refresh settings if partner
+    if (this.role === 'partner') {
+      this.refetchTrackerSettings();
+    }
   }
 
   cleanupRealtime() {
     if (this.realtimeChannel) {
       supabase.removeChannel(this.realtimeChannel);
       this.realtimeChannel = null;
+    }
+    if (this.partnerPollInterval) {
+      clearInterval(this.partnerPollInterval);
+      this.partnerPollInterval = null;
+    }
+    if (this.visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
     }
   }
 

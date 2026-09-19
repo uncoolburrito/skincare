@@ -284,4 +284,35 @@ assert.match(msgBeforeRest, /intentional rest/);
 
 console.log('✓ WhatsApp messages verified.');
 
-console.log('=== All 6 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 7. Guide Card State Reconciliation (Fix 2)
+// -----------------------------------------------------------------------------
+console.log('Test 7: Before Sleep guide card state reconciliation...');
+
+const reconciliationCycles = [
+  { id: 'c_prior', after_sleep_at: '2026-09-15T08:00:00Z', before_sleep_at: null, adapalene: null },
+  { id: 'c_tonight', after_sleep_at: null, before_sleep_at: '2026-09-18T23:06:00Z', adapalene: true }
+];
+
+const open = getOpenCycle(reconciliationCycles);
+assert.strictEqual(open?.id, 'c_tonight');
+assert.strictEqual(open.adapalene, true);
+
+// Prior plan before this check-in:
+const priorCycles = reconciliationCycles.map(c => c.id === open.id ? { ...c, before_sleep_at: null, adapalene: null } : c);
+const priorPlan = computeTonightPlan(priorCycles);
+assert.strictEqual(priorPlan.plan, 'ADAPALENE');
+
+// Next plan after this check-in:
+const nextPlan = computeTonightPlan(reconciliationCycles);
+assert.strictEqual(nextPlan.plan, 'REST');
+
+// Phase count must include the logged night:
+const phase = computeAdapalenePhase(reconciliationCycles);
+assert.strictEqual(phase.count, 1);
+assert.strictEqual(phase.key, 'build-up');
+
+console.log('✓ Guide card state reconciliation verified.');
+
+console.log('=== All 7 Test Suites Passed Successfully! ===');
+
