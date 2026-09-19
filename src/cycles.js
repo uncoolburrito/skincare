@@ -892,8 +892,19 @@ export function getGraceEligibility(graceLog = [], nowMs = Date.now()) {
 
 /**
  * Bounded Streak Grace Calculation:
- * Shields the motivational streak counter from resetting to 0 on 1 accidental miss
- * per rolling 30 real days. Progress Score strictly ignores grace.
+ *
+ * Research Citation: Polivy et al. (2010); Herman & Polivy (1975, 2002).
+ * Mechanism: Restraint Theory & The "What-the-Hell Effect".
+ * When behavioral goals are governed by rigid, all-or-nothing boundaries, a single
+ * perceived violation or lapse is interpreted as categorical failure. This triggers
+ * acute counter-regulatory disinhibition ("what the hell, I already blew my streak,
+ * might as well abandon the routine entirely"), leading to total habit abandonment.
+ *
+ * Bounded Streak Grace acts as a psychological emergency reserve (Sharps & Schroeder 2019;
+ * Herman & Polivy 2010), permitting at most 1 missed cycle shield per rolling 30 real days.
+ * This absorbs an isolated lapse, preserving motivational momentum and self-efficacy,
+ * while the biological Progress Score strictly ignores grace and continues its honest
+ * exponential decay.
  */
 export function computeCycleStreakWithGrace(cycles = [], graceLog = [], nowMs = Date.now()) {
   if (!cycles || cycles.length === 0) {

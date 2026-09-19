@@ -495,7 +495,7 @@ assert.strictEqual(ringRed.label, 'Past Typical Window');
 assert.strictEqual(ringRed.percentRemaining, 0);
 assert.ok(ringRed.lossFramedCopy.includes('protect your 5-cycles streak and current progress score (60)'));
 
-// 9d. Grace Eligibility (1 per rolling 30 real days)
+// 9d. Grace Eligibility (1 per rolling 30 real days — Herman & Polivy 2010 What-the-Hell Effect Prevention)
 const nowTest = new Date('2026-09-19T10:00:00Z').getTime();
 assert.strictEqual(getGraceEligibility([], nowTest).isEligible, true);
 

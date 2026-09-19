@@ -6,6 +6,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { sendPushNotification } from '../api/send-push.js';
+import { computePersonalGaps } from '../src/cycles.js';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
@@ -58,23 +59,28 @@ export async function checkAndSendReminders() {
   const results = [];
 
   for (const tracker of trackers) {
-    const { id, owner_id, partner_phone, nudge_threshold_hours = 14, last_nudged_cycle_id } = tracker;
-    const thresholdMs = (nudge_threshold_hours || 14) * 3600000;
+    const {
+      id,
+      owner_id,
+      partner_phone,
+      nudge_threshold_hours = 14,
+      last_nudged_cycle_id,
+      partner_alerted_cycle_id
+    } = tracker;
 
-    // Fetch latest cycle for this tracker
+    // Fetch cycles for this tracker to compute both open cycle and personal rhythm
     const { data: cycles, error: cErr } = await supabase
       .from('cycles')
       .select('*')
       .eq('tracker_id', id)
-      .order('created_at', { ascending: false })
-      .limit(1);
+      .order('created_at', { ascending: true });
 
     if (cErr || !cycles || cycles.length === 0) {
       results.push({ id, status: 'no_cycles' });
       continue;
     }
 
-    const openCycle = cycles[0];
+    const openCycle = cycles[cycles.length - 1];
     const isComplete = openCycle.after_sleep_at && openCycle.before_sleep_at;
 
     if (isComplete) {
@@ -82,27 +88,41 @@ export async function checkAndSendReminders() {
       continue;
     }
 
-    // Check if already nudged for this cycle
-    if (last_nudged_cycle_id === openCycle.id) {
-      results.push({ id, status: 'already_nudged_for_this_cycle' });
+    // Dedup guard: Check if already nudged or alerted for this open cycle
+    if (last_nudged_cycle_id === openCycle.id || partner_alerted_cycle_id === openCycle.id) {
+      results.push({ id, status: 'already_alerted_for_this_cycle', cycle_id: openCycle.id });
       continue;
     }
 
+    // Model individual personalized rhythm
+    const gaps = computePersonalGaps(cycles);
     let gapExceeded = false;
     let reminderText = '';
 
     if (openCycle.after_sleep_at && !openCycle.before_sleep_at) {
       const elapsed = now - new Date(openCycle.after_sleep_at).getTime();
+      const elapsedHours = elapsed / 3600000;
+      // Proactive red-zone threshold: personalized waking gap + 2h safety buffer (capped by nudge_threshold_hours)
+      const typicalHours = gaps.typicalWakingGapHours;
+      const redZoneThresholdHours = Math.min(nudge_threshold_hours || 14, typicalHours + 2);
+      const thresholdMs = redZoneThresholdHours * 3600000;
+
       if (elapsed >= thresholdMs) {
         gapExceeded = true;
-        const hours = Math.floor(elapsed / 3600000);
+        const hours = Math.floor(elapsedHours);
         reminderText = `Skin Streak nudge ✨: It's been ${hours}h since the After Sleep check-in — Before Sleep routine is pending!`;
       }
     } else if (openCycle.before_sleep_at && !openCycle.after_sleep_at) {
       const elapsed = now - new Date(openCycle.before_sleep_at).getTime();
+      const elapsedHours = elapsed / 3600000;
+      // Proactive red-zone threshold: personalized sleeping gap + 2h safety buffer (capped by nudge_threshold_hours)
+      const typicalHours = gaps.typicalSleepingGapHours;
+      const redZoneThresholdHours = Math.min(nudge_threshold_hours || 14, typicalHours + 2);
+      const thresholdMs = redZoneThresholdHours * 3600000;
+
       if (elapsed >= thresholdMs) {
         gapExceeded = true;
-        const hours = Math.floor(elapsed / 3600000);
+        const hours = Math.floor(elapsedHours);
         reminderText = `Skin Streak nudge 🌙: It's been ${hours}h since the Before Sleep check-in — After Sleep routine is pending!`;
       }
     }
@@ -146,10 +166,13 @@ export async function checkAndSendReminders() {
       }
 
       if (sentAny) {
-        // Track last_nudged_cycle_id so it fires once per gap, not hourly
+        // Track both last_nudged_cycle_id and partner_alerted_cycle_id so it fires once per open cycle
         await supabase
           .from('trackers')
-          .update({ last_nudged_cycle_id: openCycle.id })
+          .update({
+            last_nudged_cycle_id: openCycle.id,
+            partner_alerted_cycle_id: openCycle.id
+          })
           .eq('id', id);
         results.push({ id, status: 'nudged', cycle_id: openCycle.id });
       } else {
