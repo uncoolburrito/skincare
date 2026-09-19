@@ -31,6 +31,7 @@ create table if not exists public.trackers (
   progress_decay_tau_days numeric default 58,
   has_titration_schedule boolean default false,
   titration_phase_thresholds jsonb default '[7, 21]'::jsonb,
+  sources_summary text,
   created_at timestamptz default now()
 );
 
@@ -45,7 +46,8 @@ alter table public.trackers
   add column if not exists progress_gain_tau_days numeric default 60,
   add column if not exists progress_decay_tau_days numeric default 58,
   add column if not exists has_titration_schedule boolean default false,
-  add column if not exists titration_phase_thresholds jsonb default '[7, 21]'::jsonb;
+  add column if not exists titration_phase_thresholds jsonb default '[7, 21]'::jsonb,
+  add column if not exists sources_summary text;
 
 -- Cycles table (sleep-cycle events: After Sleep and Before Sleep)
 create table if not exists public.cycles (
@@ -164,6 +166,7 @@ select
   t.progress_decay_tau_days,
   t.has_titration_schedule,
   t.titration_phase_thresholds,
+  t.sources_summary,
   t.created_at,
   case
     when t.owner_id = auth.uid() then 'owner'

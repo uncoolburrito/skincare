@@ -1464,3 +1464,160 @@ header h1 {
   white-space: nowrap;
 }
 
+/* Unconfigured Routine Setup Banner */
+.setup-routine-card {
+  background: linear-gradient(135deg, #FBF8F3 0%, #F5EDE2 100%);
+  border: 1px solid #E5D5C3;
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  box-shadow: 0 2px 8px rgba(42, 36, 32, 0.04);
+}
+
+.setup-routine-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.setup-routine-body {
+  flex: 1;
+}
+
+.setup-routine-title {
+  font-family: 'Fraunces', serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 4px 0;
+}
+
+.setup-routine-desc {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.45;
+  margin: 0 0 12px 0;
+}
+
+.setup-routine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Routine & Protocol Summary in Settings */
+.routine-summary-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.routine-summary-row {
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.routine-summary-row strong {
+  color: var(--ink);
+  margin-right: 4px;
+}
+
+.routine-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+
+.routine-summary-meta strong {
+  color: var(--gold);
+}
+
+.routine-sources-box {
+  background: rgba(198, 137, 63, 0.08);
+  border-left: 3px solid var(--gold);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 10px;
+}
+
+.routine-sources-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.routine-sources-text {
+  font-size: 11px;
+  color: var(--ink);
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.routine-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* Calibration Step & Preview Cards */
+.calib-step-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+}
+
+.calib-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.calib-step-badge {
+  background: var(--ink);
+  color: #FFF;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.calib-step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.calib-preview-card {
+  background: #FAF7F2;
+  border: 1.5px solid var(--gold);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  box-shadow: 0 4px 12px rgba(198, 137, 63, 0.08);
+}
+
+.form-subtext {
+  font-size: 11px;
+  color: var(--ink-soft);
+  display: block;
+  margin-top: 4px;
+}
+
+

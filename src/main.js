@@ -46,6 +46,11 @@ import {
 } from './cycles.js';
 
 import {
+  generateCalibrationPrompt,
+  validateCalibrationPayload
+} from './calibration.js';
+
+import {
   registerServiceWorker,
   getNotificationPermission,
   subscribeToPush,
@@ -59,6 +64,9 @@ const state = {
   storage: new StorageController(),
   selectedCycleId: null,
   settingsOpen: false,
+  routineBuilderOpen: false,
+  aiCalibrationOpen: false,
+  aiCalibrationData: null,
   confirmResetOpen: false,
   confirmRevokeOpen: false,
   magicLinkSentEmail: null,
@@ -686,6 +694,23 @@ function renderDashboard(storageState) {
       </div>
     </header>
 
+    <!-- Unconfigured Routine Setup Banner (Owner only) -->
+    ${(isOwner && !tracker?.routine_config) ? `
+      <div class="setup-routine-card">
+        <div class="setup-routine-icon">✨</div>
+        <div class="setup-routine-body">
+          <h3 class="setup-routine-title">Set Up Your Skincare Protocol</h3>
+          <p class="setup-routine-desc">
+            Configure your morning & evening routine steps, or generate a literature-backed prompt for AI to calibrate your cellular turnover scores and titration schedule.
+          </p>
+          <div class="setup-routine-actions">
+            <button class="btn-primary btn-sm" id="btnBannerAiCalibration">✨ Calibrate with AI</button>
+            <button class="btn-secondary btn-sm" id="btnBannerRoutineBuilder">✏️ Build Manually</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
     <!-- Partner View Read-Only Banner & Nudge Card -->
     ${isPartner ? `
       <div class="partner-view-banner">
@@ -1106,6 +1131,12 @@ function renderDashboard(storageState) {
 
     <!-- Settings Modal (Owner & Partner) -->
     ${state.settingsOpen ? renderSettingsModal(tracker, storageState) : ''}
+
+    <!-- Routine Builder Modal (Owner) -->
+    ${state.routineBuilderOpen ? renderRoutineBuilderModal(tracker) : ''}
+
+    <!-- AI Calibration Modal (Owner) -->
+    ${state.aiCalibrationOpen ? renderAiCalibrationModal(tracker) : ''}
   `;
 
   // Attach event listeners
@@ -1212,6 +1243,40 @@ function renderSettingsModal(tracker, storageState) {
               Save Settings
             </button>
           </form>
+
+          <!-- Routine & Protocol Section (Owner) -->
+          <div class="modal-section">
+            <div class="modal-section-title">Skincare Protocol & Routine</div>
+            <div class="routine-summary-card">
+              <div class="routine-summary-row">
+                <strong>☀️ After Sleep:</strong>
+                <span>${escapeHtml(tracker?.routine_config?.afterSleep?.steps?.join(' → ') || 'Wash → Azelaic acid 10% → Moisturizer → Sunscreen')}</span>
+              </div>
+              <div class="routine-summary-row">
+                <strong>🌙 Before Sleep:</strong>
+                <span>
+                  ${tracker?.has_titration_schedule !== false
+                    ? `${escapeHtml(tracker?.routine_config?.beforeSleep?.titration?.productShort || 'Adapalene')} Titration (${escapeHtml(tracker?.routine_config?.beforeSleep?.titration?.activeSteps || 'Wash → Active → Moisturizer')})`
+                    : escapeHtml(tracker?.routine_config?.beforeSleep?.steps?.join(' → ') || 'Consistent nightly steps')
+                  }
+                </span>
+              </div>
+              <div class="routine-summary-meta">
+                <span>Growth τ<sub>gain</sub>: <strong>${tracker?.progress_gain_tau_days || 60}d</strong></span>
+                <span>Decay τ<sub>decay</sub>: <strong>${tracker?.progress_decay_tau_days || 58}d</strong></span>
+              </div>
+              ${(tracker?.sources_summary || tracker?.routine_config?.sources_summary) ? `
+                <div class="routine-sources-box">
+                  <div class="routine-sources-title">📚 Clinical Rationale</div>
+                  <div class="routine-sources-text">${escapeHtml(tracker?.sources_summary || tracker?.routine_config?.sources_summary)}</div>
+                </div>
+              ` : ''}
+              <div class="routine-actions-row">
+                <button type="button" class="btn-secondary btn-sm" id="btnSettingsEditRoutine">✏️ Edit Routine</button>
+                <button type="button" class="btn-secondary btn-sm" id="btnSettingsAiCalibrate">✨ Calibrate with AI</button>
+              </div>
+            </div>
+          </div>
         ` : `
           <div style="font-size: 13px; color: var(--ink); margin-bottom: 14px; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);">
             You are connected as an accountability partner for <strong>${escapeHtml(tracker?.partner_name || 'Owner')}</strong>.
@@ -1351,6 +1416,296 @@ function renderSettingsModal(tracker, storageState) {
       </div>
     </div>
   `;
+}
+
+function renderRoutineBuilderModal(tracker) {
+  const currentAfter = tracker?.routine_config?.afterSleep?.steps?.join('\n') || 'Wash\nAzelaic acid 10%\nMoisturizer\nSunscreen';
+  const currentBefore = tracker?.routine_config?.beforeSleep?.steps?.join('\n') || 'Wash\nAdapalene 0.1%\nMoisturizer';
+  const hasTitration = tracker?.has_titration_schedule === true;
+  const titr = tracker?.routine_config?.beforeSleep?.titration || {};
+  const prodName = titr.productName || 'Adapalene 0.1%';
+  const prodShort = titr.productShort || 'Adapalene';
+  const activeSteps = titr.activeSteps || 'Wash → Adapalene 0.1% → Moisturizer';
+  const restSteps = titr.restSteps || 'Wash → Moisturizer only';
+  const th1 = (tracker?.titration_phase_thresholds && tracker.titration_phase_thresholds[0]) || 7;
+  const th2 = (tracker?.titration_phase_thresholds && tracker.titration_phase_thresholds[1]) || 21;
+
+  return `
+    <div class="modal-overlay" id="routineModalOverlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 class="modal-title">Configure Routine Protocol</h2>
+          <button class="btn-icon" id="btnCloseRoutineBuilder" aria-label="Close">✕</button>
+        </div>
+        <form id="routineBuilderForm">
+          <div class="form-group">
+            <label class="form-label" for="inAfterSteps">
+              ☀️ After Sleep Routine (one step per line)
+            </label>
+            <textarea
+              id="inAfterSteps"
+              class="form-input"
+              rows="4"
+              placeholder="Wash&#10;Moisturizer&#10;Sunscreen"
+              required
+            >${escapeHtml(currentAfter)}</textarea>
+            <span class="form-subtext">Order of application after waking up.</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inBeforeSteps">
+              🌙 Before Sleep Routine (one step per line)
+            </label>
+            <textarea
+              id="inBeforeSteps"
+              class="form-input"
+              rows="3"
+              placeholder="Wash&#10;Night Treatment&#10;Moisturizer"
+              required
+            >${escapeHtml(currentBefore)}</textarea>
+            <span class="form-subtext">Order of application before going to bed.</span>
+          </div>
+
+          <div class="form-group" style="background: var(--surface); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line);">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink);">
+              <input type="checkbox" id="chkHasTitration" ${hasTitration ? 'checked' : ''} />
+              Requires gradual acclimation (Retinoid / Acid titration)
+            </label>
+            <span class="form-subtext" style="margin-top: 4px;">
+              Enables alternating active treatment nights and barrier recovery rest nights with phase transitions.
+            </span>
+
+            <div id="titrationFields" style="display: ${hasTitration ? 'block' : 'none'}; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px;">
+              <div class="form-group">
+                <label class="form-label" for="inTitrProdName">Product Full Name</label>
+                <input type="text" id="inTitrProdName" class="form-input" value="${escapeHtml(prodName)}" placeholder="e.g. Tretinoin 0.05%" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="inTitrProdShort">Short Badge Name</label>
+                <input type="text" id="inTitrProdShort" class="form-input" value="${escapeHtml(prodShort)}" placeholder="e.g. Tretinoin" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="inTitrActiveSteps">Active Night Steps</label>
+                <input type="text" id="inTitrActiveSteps" class="form-input" value="${escapeHtml(activeSteps)}" placeholder="Wash → Active → Moisturizer" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="inTitrRestSteps">Rest Night Steps</label>
+                <input type="text" id="inTitrRestSteps" class="form-input" value="${escapeHtml(restSteps)}" placeholder="Wash → Moisturizer only" />
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div class="form-group">
+                  <label class="form-label" for="inTh1">Phase 1 Nights</label>
+                  <input type="number" id="inTh1" class="form-input" value="${th1}" min="1" max="100" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="inTh2">Phase 2 Nights</label>
+                  <input type="number" id="inTh2" class="form-input" value="${th2}" min="2" max="200" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary" style="margin-top: 8px; width: 100%;">
+            Save Routine Protocol
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function renderAiCalibrationModal(tracker) {
+  const currentGoals = 'Acne prevention, barrier recovery, and daily UV protection';
+  const parsedData = state.aiCalibrationData;
+
+  return `
+    <div class="modal-overlay" id="aiModalOverlay">
+      <div class="modal-card" style="max-width: 480px;">
+        <div class="modal-header">
+          <h2 class="modal-title">✨ AI Protocol Calibration</h2>
+          <button class="btn-icon" id="btnCloseAiCalibration" aria-label="Close">✕</button>
+        </div>
+
+        <div style="font-size: 12px; color: var(--ink-soft); line-height: 1.5; margin-bottom: 14px;">
+          Generate a zero-runtime prompt calibrated for clinical dermatologists. Drop it into <strong>ChatGPT, Claude, Gemini, or DeepSeek</strong>, then paste the validated JSON back.
+        </div>
+
+        <!-- Step 1: Clinical Intake -->
+        <div class="calib-step-card">
+          <div class="calib-step-header">
+            <span class="calib-step-badge">Step 1</span>
+            <span class="calib-step-title">Skin Profile Intake</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inCalibGoals">Skin Goals & Concerns</label>
+            <input type="text" id="inCalibGoals" class="form-input" placeholder="e.g. Acne, hyperpigmentation, barrier defense" value="${escapeHtml(currentGoals)}" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inCalibProducts">Products on Hand (with active %)</label>
+            <textarea id="inCalibProducts" class="form-input" rows="3" placeholder="e.g. CeraVe Foaming Cleanser, The Ordinary Niacinamide 10%, Differin 0.1%, Vanicream Moisturizer, SPF 50"></textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="form-group">
+              <label class="form-label" for="inCalibSensitive">Active to Titrate (Optional)</label>
+              <input type="text" id="inCalibSensitive" class="form-input" placeholder="e.g. Differin 0.1%" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="inCalibSkinType">Skin Type</label>
+              <select id="inCalibSkinType" class="form-input">
+                <option value="Normal / Combination">Normal / Combination</option>
+                <option value="Dry / Sensitive">Dry / Sensitive</option>
+                <option value="Oily / Resilient">Oily / Resilient</option>
+                <option value="Acne-Prone / Reactive">Acne-Prone / Reactive</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="button" class="btn-primary btn-sm" id="btnGeneratePrompt" style="width: 100%; margin-top: 4px;">
+            ⚡ Generate Clinical Prompt
+          </button>
+        </div>
+
+        <!-- Generated Prompt Box (Hidden until generated) -->
+        <div id="promptOutputArea" style="display: none; margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--ink-soft); letter-spacing: 0.05em;">Generated Clinical Prompt</span>
+            <button type="button" class="btn-secondary btn-sm" id="btnCopyPrompt" style="font-size: 11px; padding: 3px 8px;">
+              📋 Copy Prompt
+            </button>
+          </div>
+          <textarea id="txtGeneratedPrompt" class="form-input" rows="6" readonly style="font-family: monospace; font-size: 11px; background: var(--bg);"></textarea>
+          <div style="font-size: 11px; color: var(--sage); margin-top: 4px;">
+            ✓ Drop this prompt into ChatGPT, Claude, or Gemini. Copy its JSON response and paste into Step 2 below.
+          </div>
+        </div>
+
+        <!-- Step 2: Paste Back & Validate -->
+        <div class="calib-step-card" style="margin-top: 16px;">
+          <div class="calib-step-header">
+            <span class="calib-step-badge">Step 2</span>
+            <span class="calib-step-title">Paste AI JSON Response</span>
+          </div>
+
+          <div class="form-group">
+            <textarea id="inAiJson" class="form-input" rows="4" placeholder='Paste {"routine_config": { ... }, ...} here'></textarea>
+            <div id="aiValidationError" style="color: var(--brick); font-size: 11px; margin-top: 4px; display: none;"></div>
+          </div>
+
+          <button type="button" class="btn-secondary btn-sm" id="btnValidateAiJson" style="width: 100%;">
+            🔍 Validate & Preview Protocol
+          </button>
+        </div>
+
+        <!-- Step 3: Live Preview Card (if valid payload) -->
+        ${parsedData ? `
+          <div class="calib-preview-card" style="margin-top: 16px;">
+            <div style="font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 8px;">
+              🎉 Calibrated Protocol Preview
+            </div>
+            <div class="routine-summary-row">
+              <strong>☀️ After Sleep:</strong>
+              <span>${escapeHtml(parsedData.routine_config.afterSleep.steps.join(' → '))}</span>
+            </div>
+            <div class="routine-summary-row">
+              <strong>🌙 Before Sleep:</strong>
+              <span>${escapeHtml(parsedData.routine_config.beforeSleep.steps.join(' → '))}</span>
+            </div>
+            ${parsedData.has_titration_schedule ? `
+              <div class="routine-summary-row">
+                <strong>⚡ Titration:</strong>
+                <span>${escapeHtml(parsedData.routine_config.beforeSleep.titration.productName)} (Phases: ${parsedData.titration_phase_thresholds.join(', ')} applications)</span>
+              </div>
+            ` : ''}
+            <div class="routine-summary-meta" style="margin: 8px 0;">
+              <span>τ<sub>gain</sub>: <strong>${parsedData.progress_gain_tau_days}d</strong></span>
+              <span>τ<sub>decay</sub>: <strong>${parsedData.progress_decay_tau_days}d</strong></span>
+            </div>
+            ${parsedData.sources_summary ? `
+              <div class="routine-sources-box">
+                <div class="routine-sources-title">📚 Clinical Rationale</div>
+                <div class="routine-sources-text">${escapeHtml(parsedData.sources_summary)}</div>
+              </div>
+            ` : ''}
+
+            <button type="button" class="btn-primary" id="btnApplyAiCalibration" style="width: 100%; margin-top: 12px;">
+              ✓ Apply & Save This Protocol
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+async function handleSaveRoutineBuilder(e) {
+  e.preventDefault();
+  const afterText = document.getElementById('inAfterSteps')?.value || '';
+  const beforeText = document.getElementById('inBeforeSteps')?.value || '';
+  const hasTitration = Boolean(document.getElementById('chkHasTitration')?.checked);
+
+  const afterSteps = afterText.split('\n').map(s => s.trim()).filter(Boolean);
+  const beforeSteps = beforeText.split('\n').map(s => s.trim()).filter(Boolean);
+
+  if (afterSteps.length === 0) {
+    showToast('Please enter at least one After Sleep step.');
+    return;
+  }
+  if (beforeSteps.length === 0) {
+    showToast('Please enter at least one Before Sleep step.');
+    return;
+  }
+
+  let titration = null;
+  let thresholds = [7, 21];
+  if (hasTitration) {
+    const prodName = document.getElementById('inTitrProdName')?.value.trim() || 'Active Product';
+    const prodShort = document.getElementById('inTitrProdShort')?.value.trim() || 'Active';
+    const activeSteps = document.getElementById('inTitrActiveSteps')?.value.trim() || beforeSteps.join(' → ');
+    const restSteps = document.getElementById('inTitrRestSteps')?.value.trim() || 'Wash → Moisturizer only';
+    const th1 = Math.max(1, parseInt(document.getElementById('inTh1')?.value, 10) || 7);
+    const th2 = Math.max(th1 + 1, parseInt(document.getElementById('inTh2')?.value, 10) || 21);
+    thresholds = [th1, th2];
+
+    titration = {
+      productName: prodName,
+      productShort: prodShort,
+      activeSteps,
+      restSteps,
+      activeSubtext: 'Thin layer over dry skin.',
+      restSubtext: 'Intentional barrier recovery night.',
+      phaseNames: ['Acclimation', 'Building Nightly', 'Maintenance']
+    };
+  }
+
+  const routine_config = {
+    afterSleep: {
+      title: 'After Sleep Routine',
+      steps: afterSteps,
+      subtext: 'Consistent daily barrier defense and tone.'
+    },
+    beforeSleep: {
+      title: 'Before Sleep Routine',
+      steps: beforeSteps,
+      ...(titration ? { titration } : {})
+    }
+  };
+
+  try {
+    await state.storage.updateRoutineConfig({
+      routine_config,
+      has_titration_schedule: hasTitration,
+      titration_phase_thresholds: thresholds
+    });
+    showToast('Routine protocol saved successfully!');
+    state.routineBuilderOpen = false;
+    render();
+  } catch (err) {
+    console.error('Save routine error:', err);
+    showToast('Failed to save routine protocol.');
+  }
 }
 
 function attachDashboardListeners(isOwner, tracker, cycles) {
@@ -1495,6 +1850,19 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
         render();
       });
 
+      // Settings Routine & AI Calibration triggers
+      document.getElementById('btnSettingsEditRoutine')?.addEventListener('click', () => {
+        state.settingsOpen = false;
+        state.routineBuilderOpen = true;
+        render();
+      });
+
+      document.getElementById('btnSettingsAiCalibrate')?.addEventListener('click', () => {
+        state.settingsOpen = false;
+        state.aiCalibrationOpen = true;
+        render();
+      });
+
       // Reset confirmation
       document.getElementById('btnOpenResetConfirm')?.addEventListener('click', () => {
         state.confirmResetOpen = true;
@@ -1507,6 +1875,118 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
         render();
       });
     }
+  }
+
+  // Banner Routine Setup triggers (Unconfigured tracker onboarding)
+  document.getElementById('btnBannerAiCalibration')?.addEventListener('click', () => {
+    state.aiCalibrationOpen = true;
+    render();
+  });
+
+  document.getElementById('btnBannerRoutineBuilder')?.addEventListener('click', () => {
+    state.routineBuilderOpen = true;
+    render();
+  });
+
+  // Routine Builder Modal Listeners
+  if (state.routineBuilderOpen) {
+    document.getElementById('btnCloseRoutineBuilder')?.addEventListener('click', () => {
+      state.routineBuilderOpen = false;
+      render();
+    });
+
+    document.getElementById('chkHasTitration')?.addEventListener('change', (e) => {
+      const f = document.getElementById('titrationFields');
+      if (f) {
+        f.style.display = e.target.checked ? 'block' : 'none';
+      }
+    });
+
+    document.getElementById('routineBuilderForm')?.addEventListener('submit', handleSaveRoutineBuilder);
+  }
+
+  // AI Calibration Modal Listeners
+  if (state.aiCalibrationOpen) {
+    document.getElementById('btnCloseAiCalibration')?.addEventListener('click', () => {
+      state.aiCalibrationOpen = false;
+      state.aiCalibrationData = null;
+      render();
+    });
+
+    document.getElementById('btnGeneratePrompt')?.addEventListener('click', () => {
+      const goals = document.getElementById('inCalibGoals')?.value || '';
+      const products = document.getElementById('inCalibProducts')?.value || '';
+      const sensitiveProduct = document.getElementById('inCalibSensitive')?.value || '';
+      const skinType = document.getElementById('inCalibSkinType')?.value || '';
+
+      const promptText = generateCalibrationPrompt({ goals, products, sensitiveProduct, skinType });
+      const area = document.getElementById('promptOutputArea');
+      const txt = document.getElementById('txtGeneratedPrompt');
+      if (area && txt) {
+        txt.value = promptText;
+        area.style.display = 'block';
+        area.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+
+    document.getElementById('btnCopyPrompt')?.addEventListener('click', async () => {
+      const txt = document.getElementById('txtGeneratedPrompt');
+      if (txt && txt.value) {
+        try {
+          await navigator.clipboard.writeText(txt.value);
+          showToast('Clinical prompt copied to clipboard!');
+        } catch {
+          txt.select();
+          document.execCommand('copy');
+          showToast('Clinical prompt copied!');
+        }
+      }
+    });
+
+    document.getElementById('btnValidateAiJson')?.addEventListener('click', () => {
+      const rawJson = document.getElementById('inAiJson')?.value || '';
+      const errorEl = document.getElementById('aiValidationError');
+      const res = validateCalibrationPayload(rawJson);
+
+      if (!res.valid) {
+        if (errorEl) {
+          errorEl.textContent = res.error;
+          errorEl.style.display = 'block';
+        }
+        return;
+      }
+
+      if (errorEl) {
+        errorEl.style.display = 'none';
+      }
+
+      state.aiCalibrationData = res.data;
+      showToast('Protocol validated! Review preview below.');
+      render();
+    });
+
+    document.getElementById('btnApplyAiCalibration')?.addEventListener('click', async () => {
+      if (!state.aiCalibrationData) return;
+      const btn = document.getElementById('btnApplyAiCalibration');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Saving Protocol...';
+      }
+      try {
+        await state.storage.updateRoutineConfig(state.aiCalibrationData);
+        showToast('Clinical protocol calibrated & saved!');
+        state.aiCalibrationOpen = false;
+        state.aiCalibrationData = null;
+        render();
+      } catch (err) {
+        console.error('Apply calibration error:', err);
+        showToast('Failed to save calibrated protocol.');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '✓ Apply & Save This Protocol';
+        }
+      }
+    });
   }
 
   if (!isOwner) return;

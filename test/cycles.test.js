@@ -26,6 +26,10 @@ import {
   canSendPartnerNudge,
   formatPartnerNudgeMessage
 } from '../src/cycles.js';
+import {
+  generateCalibrationPrompt,
+  validateCalibrationPayload
+} from '../src/calibration.js';
 
 console.log('=== Running Skin Streak v3 Cycle Engine Tests ===');
 
@@ -713,6 +717,95 @@ assert.ok(scoreFast > scoreNormal, 'Faster tauGain (30 days) should yield higher
 
 console.log('✓ Parameterized Routines & Generic Titration Schedules verified.');
 
-console.log('=== All 11 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 12. AI Calibration Prompt Generation & Payload Validation Engine
+// -----------------------------------------------------------------------------
+console.log('Test 12: AI Calibration Prompt & Payload Validation Engine...');
+
+// 12a. Prompt Generation with user intake values
+const prompt = generateCalibrationPrompt({
+  goals: 'Post-inflammatory erythema and acne prevention',
+  products: 'Gentle cleanser, Azelaic acid 10%, Moisturizer, SPF 50',
+  sensitiveProduct: 'Azelaic acid 10%',
+  skinType: 'Combination / Sensitive'
+});
+
+assert.ok(typeof prompt === 'string' && prompt.length > 200);
+assert.ok(prompt.includes('Skin Streak'));
+assert.ok(prompt.includes('Post-inflammatory erythema'));
+assert.ok(prompt.includes('Azelaic acid 10%'));
+assert.ok(prompt.includes('Combination / Sensitive'));
+assert.ok(prompt.includes('progress_gain_tau_days'));
+assert.ok(prompt.includes('sources_summary'));
+
+// 12b. Validate valid JSON payload with titration
+const validAiPayload = JSON.stringify({
+  routine_config: {
+    afterSleep: {
+      title: 'Morning Routine',
+      steps: ['Gentle Wash', 'Azelaic acid 10%', 'Moisturizer', 'SPF 50'],
+      subtext: 'Tone evening and UV defense'
+    },
+    beforeSleep: {
+      title: 'Night Routine',
+      steps: ['Gentle Wash', 'Tretinoin 0.025%', 'Barrier Cream'],
+      titration: {
+        productName: 'Tretinoin 0.025%',
+        productShort: 'Tretinoin',
+        activeSteps: 'Wash → Tretinoin → Barrier Cream',
+        restSteps: 'Wash → Barrier Cream only',
+        activeSubtext: 'Apply pea-sized amount over completely dry skin.',
+        restSubtext: 'Hydrate and recover barrier.',
+        phaseNames: ['Acclimation', 'Nightly Build', 'Long-term Maintenance']
+      }
+    }
+  },
+  has_titration_schedule: true,
+  titration_phase_thresholds: [10, 30],
+  progress_gain_tau_days: 70,
+  progress_decay_tau_days: 65,
+  sources_summary: 'Leyden et al. (2017) topical retinoid tolerability guidelines; Grove & Kligman (1983) stratum corneum turnover rates.'
+});
+
+const validRes = validateCalibrationPayload(validAiPayload);
+assert.strictEqual(validRes.valid, true);
+assert.strictEqual(validRes.data.has_titration_schedule, true);
+assert.deepStrictEqual(validRes.data.titration_phase_thresholds, [10, 30]);
+assert.strictEqual(validRes.data.progress_gain_tau_days, 70);
+assert.strictEqual(validRes.data.progress_decay_tau_days, 65);
+assert.strictEqual(validRes.data.routine_config.afterSleep.steps.length, 4);
+assert.strictEqual(validRes.data.routine_config.beforeSleep.titration.productShort, 'Tretinoin');
+
+// 12c. Markdown code fence stripping (```json ... ```)
+const fencedPayload = '```json\n' + validAiPayload + '\n```';
+const fencedRes = validateCalibrationPayload(fencedPayload);
+assert.strictEqual(fencedRes.valid, true);
+assert.strictEqual(fencedRes.data.progress_gain_tau_days, 70);
+
+// 12d. Reject invalid / malformed inputs
+assert.strictEqual(validateCalibrationPayload('').valid, false);
+assert.strictEqual(validateCalibrationPayload('not-json').valid, false);
+assert.strictEqual(validateCalibrationPayload('{"routine_config": {}}').valid, false);
+
+// 12e. Non-titration valid payload
+const nonTitrationPayload = {
+  routine_config: {
+    afterSleep: { steps: ['Wash', 'Moisturizer', 'SPF'] },
+    beforeSleep: { steps: ['Wash', 'Moisturizer'] }
+  },
+  has_titration_schedule: false,
+  progress_gain_tau_days: 45,
+  progress_decay_tau_days: 45,
+  sources_summary: 'Baseline hydration and barrier maintenance.'
+};
+const nonTitRes = validateCalibrationPayload(nonTitrationPayload);
+assert.strictEqual(nonTitRes.valid, true);
+assert.strictEqual(nonTitRes.data.has_titration_schedule, false);
+assert.strictEqual(nonTitRes.data.routine_config.beforeSleep.titration, undefined);
+
+console.log('✓ AI Calibration Prompt & Payload Validation Engine verified.');
+
+console.log('=== All 12 Test Suites Passed Successfully! ===');
+
 
 

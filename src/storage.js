@@ -604,6 +604,67 @@ export class StorageController {
   }
 
   /**
+   * Updates tracker routine configuration, titration schedule, tau parameters, and sources summary
+   */
+  async updateRoutineConfig({
+    routine_config,
+    has_titration_schedule,
+    titration_phase_thresholds,
+    progress_gain_tau_days,
+    progress_decay_tau_days,
+    sources_summary
+  }) {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can update routine configuration.');
+    }
+
+    const updates = {};
+    if (routine_config !== undefined) {
+      const mergedConfig = { ...routine_config };
+      if (sources_summary !== undefined) {
+        mergedConfig.sources_summary = sources_summary;
+      }
+      updates.routine_config = mergedConfig;
+    }
+    if (has_titration_schedule !== undefined) updates.has_titration_schedule = Boolean(has_titration_schedule);
+    if (titration_phase_thresholds !== undefined) updates.titration_phase_thresholds = titration_phase_thresholds;
+    if (progress_gain_tau_days !== undefined) updates.progress_gain_tau_days = Number(progress_gain_tau_days);
+    if (progress_decay_tau_days !== undefined) updates.progress_decay_tau_days = Number(progress_decay_tau_days);
+    if (sources_summary !== undefined) updates.sources_summary = sources_summary;
+
+    let { data, error } = await supabase
+      .from('trackers')
+      .update(updates)
+      .eq('id', this.tracker.id)
+      .select()
+      .single();
+
+    // Graceful fallback if sources_summary column is not yet present on remote DB
+    if (error && (error.code === '42703' || error.message?.includes('sources_summary'))) {
+      console.warn('[StorageController] Column sources_summary not in schema, retrying without column...');
+      const fallbackUpdates = { ...updates };
+      delete fallbackUpdates.sources_summary;
+      const res = await supabase
+        .from('trackers')
+        .update(fallbackUpdates)
+        .eq('id', this.tracker.id)
+        .select()
+        .single();
+      data = res.data;
+      error = res.error;
+    }
+
+    if (error) {
+      console.error('[StorageController] Error updating routine config:', error);
+      throw error;
+    }
+
+    this.tracker = data;
+    this.notify();
+    return data;
+  }
+
+  /**
    * Applies streak grace to a missed cycle, appending to trackers.grace_log
    */
   async applyStreakGrace(cycleId) {
