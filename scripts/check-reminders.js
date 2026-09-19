@@ -5,6 +5,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { sendPushNotification } from '../api/send-push.js';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
@@ -57,7 +58,7 @@ export async function checkAndSendReminders() {
   const results = [];
 
   for (const tracker of trackers) {
-    const { id, partner_phone, nudge_threshold_hours = 14, last_nudged_cycle_id } = tracker;
+    const { id, owner_id, partner_phone, nudge_threshold_hours = 14, last_nudged_cycle_id } = tracker;
     const thresholdMs = (nudge_threshold_hours || 14) * 3600000;
 
     // Fetch latest cycle for this tracker
@@ -106,10 +107,45 @@ export async function checkAndSendReminders() {
       }
     }
 
-    if (gapExceeded && partner_phone && CALLMEBOT_API_KEY) {
-      console.log(`[Reminder] Nudging tracker ${id} to ${partner_phone}...`);
-      const sent = await sendCallMeBotWhatsApp(partner_phone, CALLMEBOT_API_KEY, reminderText);
-      if (sent) {
+    if (gapExceeded) {
+      let sentAny = false;
+
+      // 1. Send push notification directly to owner's registered devices
+      if (owner_id) {
+        try {
+          const { data: pushSubs } = await supabase
+            .from('push_subscriptions')
+            .select('fcm_token')
+            .eq('user_id', owner_id);
+
+          const tokens = (pushSubs || []).map(s => s.fcm_token).filter(Boolean);
+          if (tokens.length > 0) {
+            console.log(`[Reminder] Dispatching push notification to ${tokens.length} device(s) for owner ${owner_id}...`);
+            const pushRes = await sendPushNotification(tokens, {
+              title: 'Skin Streak Reminder ✨',
+              body: reminderText,
+              tag: `reminder-${openCycle.id}`,
+              data: { url: '/', cycleId: openCycle.id }
+            });
+            if (pushRes && (pushRes.sent > 0 || pushRes.simulated > 0)) {
+              sentAny = true;
+            }
+          }
+        } catch (pushErr) {
+          console.error('[Reminder] Push notification dispatch error:', pushErr);
+        }
+      }
+
+      // 2. Send WhatsApp notification to partner (if configured)
+      if (partner_phone && CALLMEBOT_API_KEY) {
+        console.log(`[Reminder] Nudging tracker ${id} to partner ${partner_phone}...`);
+        const sent = await sendCallMeBotWhatsApp(partner_phone, CALLMEBOT_API_KEY, reminderText);
+        if (sent) {
+          sentAny = true;
+        }
+      }
+
+      if (sentAny) {
         // Track last_nudged_cycle_id so it fires once per gap, not hourly
         await supabase
           .from('trackers')
@@ -117,10 +153,10 @@ export async function checkAndSendReminders() {
           .eq('id', id);
         results.push({ id, status: 'nudged', cycle_id: openCycle.id });
       } else {
-        results.push({ id, status: 'failed_to_send' });
+        results.push({ id, status: (!partner_phone && !owner_id) ? 'missing_recipients' : 'failed_to_send' });
       }
     } else {
-      results.push({ id, status: gapExceeded ? 'missing_phone_or_key' : 'threshold_not_reached' });
+      results.push({ id, status: 'threshold_not_reached' });
     }
   }
 

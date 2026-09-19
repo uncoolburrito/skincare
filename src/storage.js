@@ -402,7 +402,8 @@ export class StorageController {
         let changed = false;
         if (
           this.tracker.partner_name !== data.partner_name ||
-          this.tracker.nudge_threshold_hours !== data.nudge_threshold_hours
+          this.tracker.nudge_threshold_hours !== data.nudge_threshold_hours ||
+          this.tracker.last_partner_nudge_at !== data.last_partner_nudge_at
         ) {
           changed = true;
         }
@@ -742,5 +743,99 @@ export class StorageController {
 
     this.cycles = [];
     this.notify();
+  }
+
+  /**
+   * Saves or updates a device push subscription token for the current user
+   */
+  async savePushSubscription(fcmToken) {
+    if (!this.user || !fcmToken) return null;
+    try {
+      const { data, error } = await supabase
+        .from('push_subscriptions')
+        .upsert(
+          { user_id: this.user.id, fcm_token: fcmToken },
+          { onConflict: 'user_id, fcm_token' }
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.warn('[StorageController] Error saving push subscription:', error);
+      }
+      return data;
+    } catch (e) {
+      console.warn('[StorageController] Exception saving push subscription:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Removes a device push subscription token
+   */
+  async removePushSubscription(fcmToken) {
+    if (!this.user || !fcmToken) return;
+    try {
+      await supabase
+        .from('push_subscriptions')
+        .delete()
+        .eq('user_id', this.user.id)
+        .eq('fcm_token', fcmToken);
+    } catch (e) {
+      console.warn('[StorageController] Exception removing push subscription:', e);
+    }
+  }
+
+  /**
+   * Partner triggers a "did you forget?" nudge to the Owner
+   */
+  async sendPartnerNudge(trackerId) {
+    if (!this.user || !trackerId) {
+      throw new Error('You must be logged in to send a nudge.');
+    }
+
+    const sessionRes = await supabase.auth.getSession();
+    const token = sessionRes.data.session?.access_token;
+
+    // 1. Try serverless endpoint first
+    try {
+      const res = await fetch('/api/send-partner-nudge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ tracker_id: trackerId })
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || 'Nudge request failed');
+      }
+
+      if (this.tracker) {
+        this.tracker.last_partner_nudge_at = json.nudged_at || new Date().toISOString();
+        this.notify();
+      }
+      return json;
+    } catch (apiErr) {
+      console.warn('[StorageController] Serverless API unavailable or failed, falling back to direct RPC:', apiErr);
+
+      // 2. Direct fallback to Supabase stored procedure
+      const { data, error } = await supabase.rpc('record_partner_nudge', {
+        p_tracker_id: trackerId
+      });
+
+      if (error) throw error;
+      if (!data || data.success === false) {
+        throw new Error(data?.error || 'Nudge request failed');
+      }
+
+      if (this.tracker) {
+        this.tracker.last_partner_nudge_at = data.nudged_at || new Date().toISOString();
+        this.notify();
+      }
+      return data;
+    }
   }
 }

@@ -956,3 +956,36 @@ export function formatProactivePartnerAlert(ownerName = 'The tracker owner', pen
   const routine = pendingType === 'beforeSleep' ? 'Before Sleep' : 'After Sleep';
   return `Hey! Quick nudge for ${ownerName}: they haven't logged ${routine} skincare yet and it's later than usual for them (${Math.round(elapsedHours)}h vs typical ${Math.round(typicalHours)}h). Could you check in on them?`;
 }
+
+/**
+ * Formats the push notification message body for Partner-initiated nudge.
+ */
+export function formatPartnerNudgeMessage(partnerName = 'Your partner', pendingSlot = 'routine') {
+  const cleanName = (partnerName || '').trim() || 'Your partner';
+  const cleanSlot = pendingSlot === 'beforeSleep' ? 'Before Sleep' : (pendingSlot === 'afterSleep' ? 'After Sleep' : (pendingSlot || 'skincare'));
+  if (cleanSlot.toLowerCase().endsWith('routine')) {
+    return `${cleanName} thinks you might have forgotten your ${cleanSlot}.`;
+  }
+  return `${cleanName} thinks you might have forgotten your ${cleanSlot} routine.`;
+}
+
+/**
+ * Determines whether the Partner can send a nudge based on 1-hour rate limit.
+ */
+export function canSendPartnerNudge(lastNudgeAt, nowMs = Date.now(), cooldownMs = 3600000) {
+  if (!lastNudgeAt) {
+    return { allowed: true, remainingMinutes: 0, remainingSeconds: 0 };
+  }
+  const lastMs = new Date(lastNudgeAt).getTime();
+  if (isNaN(lastMs)) {
+    return { allowed: true, remainingMinutes: 0, remainingSeconds: 0 };
+  }
+  const elapsed = nowMs - lastMs;
+  if (elapsed >= cooldownMs) {
+    return { allowed: true, remainingMinutes: 0, remainingSeconds: 0 };
+  }
+  const remainingSeconds = Math.ceil((cooldownMs - elapsed) / 1000);
+  const remainingMinutes = Math.ceil(remainingSeconds / 60);
+  return { allowed: false, remainingMinutes, remainingSeconds };
+}
+

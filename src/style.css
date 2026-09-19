@@ -1307,3 +1307,160 @@ header h1 {
     font-size: 13px;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Partner Nudge & Push Notification Components
+   -------------------------------------------------------------------------- */
+.partner-nudge-card {
+  background: var(--panel);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.partner-nudge-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.partner-nudge-icon {
+  font-size: 24px;
+  line-height: 1;
+  background: #FEF3C7;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.partner-nudge-text {
+  flex: 1;
+}
+
+.partner-nudge-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+
+.partner-nudge-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.btn-partner-nudge {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--line-strong);
+  background: var(--ink);
+  color: #FFF;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-partner-nudge:hover:not(:disabled) {
+  background: #000;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-partner-nudge:disabled {
+  background: var(--line);
+  color: var(--ink-soft);
+  border-color: var(--line);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+/* Push Settings in Modal */
+.push-settings-card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.push-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.push-status-badge.granted {
+  background: #EDF3EE;
+  color: #059669;
+}
+
+.push-status-badge.default {
+  background: #FEF3C7;
+  color: #D97706;
+}
+
+.push-status-badge.denied {
+  background: #FDE8E4;
+  color: #B45341;
+}
+
+.btn-push-action {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-push-action:hover {
+  background: var(--line);
+}
+
+/* PWA Install Banner */
+.pwa-install-banner {
+  background: #F4EBE1;
+  border: 1px solid rgba(198, 137, 63, 0.4);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btn-install-pwa {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--gold);
+  color: #FFF;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+

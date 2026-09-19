@@ -40,8 +40,17 @@ import {
   computeRiskRingState,
   getGraceEligibility,
   computeCycleStreakWithGrace,
-  formatProactivePartnerAlert
+  formatProactivePartnerAlert,
+  canSendPartnerNudge,
+  formatPartnerNudgeMessage
 } from './cycles.js';
+
+import {
+  registerServiceWorker,
+  getNotificationPermission,
+  subscribeToPush,
+  syncExistingPushSubscription
+} from './push.js';
 
 // Application State
 const state = {
@@ -55,7 +64,8 @@ const state = {
   magicLinkSentEmail: null,
   inviteLinkData: null,
   pendingInviteToken: null,
-  authMode: 'password' // 'password' | 'magic'
+  authMode: 'password', // 'password' | 'magic'
+  deferredInstallPrompt: null
 };
 
 const APP = document.getElementById('app');
@@ -90,6 +100,22 @@ function openWhatsApp(phone, message) {
 async function initApp() {
   state.pendingInviteToken = extractInviteTokenFromUrl();
 
+  // Register PWA service worker
+  registerServiceWorker();
+
+  // Capture PWA install prompt for Android/Chrome
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    state.deferredInstallPrompt = e;
+    render();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    state.deferredInstallPrompt = null;
+    showToast('Skin Streak successfully installed!');
+    render();
+  });
+
   // Listen to auth state transitions
   onAuthStateChange(async (event, session) => {
     console.log('[App] Auth state change event:', event);
@@ -100,6 +126,7 @@ async function initApp() {
       state.loading = true;
       render();
       await state.storage.init(user, state.pendingInviteToken);
+      await syncExistingPushSubscription(state.storage);
       state.loading = false;
       render();
     } else {
@@ -113,6 +140,7 @@ async function initApp() {
   state.user = user;
   if (user) {
     await state.storage.init(user, state.pendingInviteToken);
+    await syncExistingPushSubscription(state.storage);
   }
   state.loading = false;
 
@@ -604,6 +632,7 @@ function renderDashboard(storageState) {
   const openCycle = getOpenCycle(cycles);
   const personalGaps = computePersonalGaps(cycles);
   const riskRing = computeRiskRingState(cycles, personalGaps, streak, progress.score);
+  const nudgeStatus = isPartner ? canSendPartnerNudge(tracker?.last_partner_nudge_at) : null;
 
   // Status of open cycle
   const afterLogged = !!(openCycle && openCycle.after_sleep_at);
@@ -644,11 +673,9 @@ function renderDashboard(storageState) {
           </span>
         </div>
         <div class="header-actions">
-          ${isOwner ? `
-            <button class="btn-icon" id="btnOpenSettings" title="Settings" aria-label="Settings">
-              ⚙️
-            </button>
-          ` : ''}
+          <button class="btn-icon" id="btnOpenSettings" title="Settings" aria-label="Settings">
+            ⚙️
+          </button>
           <button class="btn-icon" id="btnSignOut" title="Sign Out" aria-label="Sign Out">
             🚪
           </button>
@@ -659,7 +686,7 @@ function renderDashboard(storageState) {
       </div>
     </header>
 
-    <!-- Partner View Read-Only Banner -->
+    <!-- Partner View Read-Only Banner & Nudge Card -->
     ${isPartner ? `
       <div class="partner-view-banner">
         <span class="icon">👀</span>
@@ -667,6 +694,29 @@ function renderDashboard(storageState) {
           <strong>Read-Only Accountability View</strong>
           You're tracking in real time. Changes made by the owner update automatically.
         </div>
+      </div>
+
+      <!-- Partner-Initiated "Did You Forget?" Nudge Card -->
+      <div class="partner-nudge-card">
+        <div class="partner-nudge-header">
+          <div class="partner-nudge-icon">🔔</div>
+          <div class="partner-nudge-text">
+            <div class="partner-nudge-title">Accountability Nudge</div>
+            <div class="partner-nudge-desc">
+              Send an instant push notification to ${escapeHtml(tracker?.partner_name || 'Owner')}'s phone if you think they might have forgotten their routine.
+            </div>
+          </div>
+        </div>
+        <button
+          class="btn-partner-nudge"
+          id="btnSendPartnerNudge"
+          ${nudgeStatus?.allowed ? '' : 'disabled'}
+        >
+          ${nudgeStatus?.allowed
+            ? `💬 Nudge ${escapeHtml(tracker?.partner_name || 'Owner')} ("Did you forget?")`
+            : `⏳ Nudge sent • Cooldown (${nudgeStatus?.remainingMinutes}m remaining)`
+          }
+        </button>
       </div>
     ` : ''}
 
@@ -1029,8 +1079,8 @@ function renderDashboard(storageState) {
       </div>
     </div>
 
-    <!-- Settings Modal (Owner Only, Feature 6) -->
-    ${(isOwner && state.settingsOpen) ? renderSettingsModal(tracker, storageState) : ''}
+    <!-- Settings Modal (Owner & Partner) -->
+    ${state.settingsOpen ? renderSettingsModal(tracker, storageState) : ''}
   `;
 
   // Attach event listeners
@@ -1038,9 +1088,11 @@ function renderDashboard(storageState) {
 }
 
 function renderSettingsModal(tracker, storageState) {
+  const isOwner = storageState.role === 'owner';
   const partner = storageState.partner;
   const activeInvites = storageState.activeInvites || [];
   const inviteData = state.inviteLinkData;
+  const notifPerm = getNotificationPermission();
 
   return `
     <div class="modal-overlay" id="modalOverlay">
@@ -1050,154 +1102,208 @@ function renderSettingsModal(tracker, storageState) {
           <button class="btn-icon" id="btnCloseSettings" aria-label="Close">✕</button>
         </div>
 
-        <form id="settingsForm">
-          <div class="form-group">
-            <label class="form-label" for="inPartnerName">Partner's Display Name</label>
-            <input
-              type="text"
-              id="inPartnerName"
-              class="form-input"
-              placeholder="e.g. Sarah"
-              value="${escapeHtml(tracker?.partner_name || '')}"
-            />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="inPartnerPhone">Partner's WhatsApp Number</label>
-            <input
-              type="tel"
-              id="inPartnerPhone"
-              class="form-input"
-              placeholder="e.g. +14155552671 or 919876543210"
-              value="${escapeHtml(tracker?.partner_phone || '')}"
-            />
-            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
-              Kept strictly private on your owner record. Never visible to your partner's client.
-            </span>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="inNudgeThreshold">Nudge Threshold (Hours)</label>
-            <input
-              type="number"
-              id="inNudgeThreshold"
-              class="form-input"
-              min="1"
-              max="48"
-              value="${tracker?.nudge_threshold_hours || 14}"
-            />
-            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
-              Shows an in-app banner when one half of a cycle has been open for longer than this.
-            </span>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="inAfterSleepCue">After Sleep Situational Cue</label>
-            <input
-              type="text"
-              id="inAfterSleepCue"
-              class="form-input"
-              placeholder="e.g. right when my alarm rings"
-              value="${escapeHtml(tracker?.after_sleep_cue || 'right when I wake up')}"
-            />
-            <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
-              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right when my alarm rings" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">alarm rings</button>
-              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right after my morning shower" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">morning shower</button>
-              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="while morning coffee brews" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">coffee brews</button>
+        ${isOwner ? `
+          <form id="settingsForm">
+            <div class="form-group">
+              <label class="form-label" for="inPartnerName">Partner's Display Name</label>
+              <input
+                type="text"
+                id="inPartnerName"
+                class="form-input"
+                placeholder="e.g. Sarah"
+                value="${escapeHtml(tracker?.partner_name || '')}"
+              />
             </div>
-            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
-              Anchoring your routine to an existing situational cue increases follow-through 2–3x (Gollwitzer 1999).
-            </span>
-          </div>
 
-          <div class="form-group">
-            <label class="form-label" for="inBeforeSleepCue">Before Sleep Situational Cue</label>
-            <input
-              type="text"
-              id="inBeforeSleepCue"
-              class="form-input"
-              placeholder="e.g. right before I get into bed"
-              value="${escapeHtml(tracker?.before_sleep_cue || 'right before I get into bed')}"
-            />
-            <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
-              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after brushing my teeth" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">brushing teeth</button>
-              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right before plugging phone into charger" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">charging phone</button>
-              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after changing into nightwear" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">nightwear</button>
+            <div class="form-group">
+              <label class="form-label" for="inPartnerPhone">Partner's WhatsApp Number</label>
+              <input
+                type="tel"
+                id="inPartnerPhone"
+                class="form-input"
+                placeholder="e.g. +14155552671 or 919876543210"
+                value="${escapeHtml(tracker?.partner_phone || '')}"
+              />
+              <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+                Kept strictly private on your owner record. Never visible to your partner's client.
+              </span>
             </div>
-          </div>
 
-          <button type="submit" class="btn-primary" style="margin-top: 8px;">
-            Save Settings
-          </button>
-        </form>
-
-        <!-- Partner Invite Flow -->
-        <div class="modal-section">
-          <div class="modal-section-title">Accountability Partner Access</div>
-
-          ${partner ? `
-            <div style="font-size: 13px; color: var(--ink); margin-bottom: 10px;">
-              ✓ Partner connected since ${formatDateTime(partner.joined_at)}
+            <div class="form-group">
+              <label class="form-label" for="inNudgeThreshold">Nudge Threshold (Hours)</label>
+              <input
+                type="number"
+                id="inNudgeThreshold"
+                class="form-input"
+                min="1"
+                max="48"
+                value="${tracker?.nudge_threshold_hours || 14}"
+              />
+              <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+                Shows an in-app banner when one half of a cycle has been open for longer than this.
+              </span>
             </div>
-            ${state.confirmRevokeOpen ? `
-              <div class="confirm-box">
-                <div class="confirm-title">Revoke Partner Access?</div>
-                <div class="confirm-msg">They will immediately lose read access to your tracker log.</div>
-                <div class="confirm-actions">
-                  <button class="btn-danger" id="btnConfirmRevoke">Yes, Revoke</button>
-                  <button class="btn-secondary" id="btnCancelRevoke">Cancel</button>
-                </div>
+
+            <div class="form-group">
+              <label class="form-label" for="inAfterSleepCue">After Sleep Situational Cue</label>
+              <input
+                type="text"
+                id="inAfterSleepCue"
+                class="form-input"
+                placeholder="e.g. right when my alarm rings"
+                value="${escapeHtml(tracker?.after_sleep_cue || 'right when I wake up')}"
+              />
+              <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+                <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right when my alarm rings" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">alarm rings</button>
+                <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right after my morning shower" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">morning shower</button>
+                <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="while morning coffee brews" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">coffee brews</button>
               </div>
-            ` : `
-              <button class="btn-danger" id="btnRevokePartner">
-                Revoke Partner Access
-              </button>
-            `}
-          ` : `
-            <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 12px;">
-              Invite an accountability partner to see your real-time log, streak, and timeline (read-only).
-            </p>
-            <button class="btn-secondary" id="btnGenerateInvite" style="width: 100%;">
-              + Generate 7-Day Single-Use Invite Link
+              <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+                Anchoring your routine to an existing situational cue increases follow-through 2–3x (Gollwitzer 1999).
+              </span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="inBeforeSleepCue">Before Sleep Situational Cue</label>
+              <input
+                type="text"
+                id="inBeforeSleepCue"
+                class="form-input"
+                placeholder="e.g. right before I get into bed"
+                value="${escapeHtml(tracker?.before_sleep_cue || 'right before I get into bed')}"
+              />
+              <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+                <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after brushing my teeth" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">brushing teeth</button>
+                <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right before plugging phone into charger" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">charging phone</button>
+                <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after changing into nightwear" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">nightwear</button>
+              </div>
+            </div>
+
+            <button type="submit" class="btn-primary" style="margin-top: 8px;">
+              Save Settings
             </button>
-          `}
+          </form>
+        ` : `
+          <div style="font-size: 13px; color: var(--ink); margin-bottom: 14px; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);">
+            You are connected as an accountability partner for <strong>${escapeHtml(tracker?.partner_name || 'Owner')}</strong>.
+          </div>
+        `}
 
-          ${inviteData ? `
-            <div class="invite-box">
-              <div style="font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 4px;">
-                Single-Use Invite Link (Expires in 7 days):
+        <!-- Push Notifications & App Installation (Both Owner & Partner) -->
+        <div class="modal-section">
+          <div class="modal-section-title">Push Notifications & Install</div>
+          <div class="push-settings-card">
+            <div>
+              <div style="font-size: 13px; font-weight: 600; color: var(--ink);">Push Notifications</div>
+              <div style="font-size: 11px; color: var(--ink-soft); margin-top: 2px;">
+                ${notifPerm === 'granted'
+                  ? 'Active on this device (receiving routine nudges).'
+                  : (notifPerm === 'denied'
+                    ? 'Blocked in browser settings.'
+                    : 'Get real phone notifications when routines are pending.')}
               </div>
-              <div class="invite-url-text">${escapeHtml(inviteData.inviteUrl)}</div>
-              <div class="invite-actions">
-                <button class="btn-secondary" id="btnCopyInvite">Copy Link</button>
-                <button class="btn-secondary" id="btnShareInviteWhatsApp">Send on WhatsApp</button>
+            </div>
+            <div>
+              ${notifPerm === 'granted' ? `
+                <span class="push-status-badge granted">Active</span>
+              ` : (notifPerm === 'denied' ? `
+                <span class="push-status-badge denied">Blocked</span>
+              ` : `
+                <button type="button" class="btn-push-action" id="btnEnablePush">
+                  Enable
+                </button>
+              `)}
+            </div>
+          </div>
+
+          ${state.deferredInstallPrompt ? `
+            <div class="pwa-install-banner" style="margin-top: 10px;">
+              <div style="font-size: 12px; color: var(--ink);">
+                <strong>Install Skin Streak App</strong><br>
+                Add to Android home screen for one-tap tracking.
               </div>
+              <button type="button" class="btn-install-pwa" id="btnTriggerInstall">
+                Install App
+              </button>
             </div>
           ` : ''}
         </div>
 
-        <!-- In-App Reset Confirmation (Feature 6) -->
-        <div class="modal-section">
-          <div class="modal-section-title">Reset Cycle History</div>
-          <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 10px;">
-            Clears all logged cycles for this tracker. Resets your streak, missed counts, and restarts Adapalene at the build-up phase.
-          </p>
+        ${isOwner ? `
+          <!-- Partner Invite Flow -->
+          <div class="modal-section">
+            <div class="modal-section-title">Accountability Partner Access</div>
 
-          ${state.confirmResetOpen ? `
-            <div class="confirm-box">
-              <div class="confirm-title">Clear all cycles and restart streak?</div>
-              <div class="confirm-msg">This cannot be undone. All your past check-in logs will be permanently deleted.</div>
-              <div class="confirm-actions">
-                <button class="btn-danger" id="btnConfirmReset">Yes, Reset Everything</button>
-                <button class="btn-secondary" id="btnCancelReset">Cancel</button>
+            ${partner ? `
+              <div style="font-size: 13px; color: var(--ink); margin-bottom: 10px;">
+                ✓ Partner connected since ${formatDateTime(partner.joined_at)}
               </div>
-            </div>
-          ` : `
-            <button class="btn-danger" id="btnOpenResetConfirm">
-              Reset Tracker History
+              ${state.confirmRevokeOpen ? `
+                <div class="confirm-box">
+                  <div class="confirm-title">Revoke Partner Access?</div>
+                  <div class="confirm-msg">They will immediately lose read access to your tracker log.</div>
+                  <div class="confirm-actions">
+                    <button class="btn-danger" id="btnConfirmRevoke">Yes, Revoke</button>
+                    <button class="btn-secondary" id="btnCancelRevoke">Cancel</button>
+                  </div>
+                </div>
+              ` : `
+                <button class="btn-danger" id="btnRevokePartner">
+                  Revoke Partner Access
+                </button>
+              `}
+            ` : `
+              <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 12px;">
+                Invite an accountability partner to see your real-time log, streak, and timeline (read-only).
+              </p>
+              <button class="btn-secondary" id="btnGenerateInvite" style="width: 100%;">
+                + Generate 7-Day Single-Use Invite Link
+              </button>
+            `}
+
+            ${inviteData ? `
+              <div class="invite-box">
+                <div style="font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 4px;">
+                  Single-Use Invite Link (Expires in 7 days):
+                </div>
+                <div class="invite-url-text">${escapeHtml(inviteData.inviteUrl)}</div>
+                <div class="invite-actions">
+                  <button class="btn-secondary" id="btnCopyInvite">Copy Link</button>
+                  <button class="btn-secondary" id="btnShareInviteWhatsApp">Send on WhatsApp</button>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- In-App Reset Confirmation (Feature 6) -->
+          <div class="modal-section">
+            <div class="modal-section-title">Reset Cycle History</div>
+            <p style="font-size: 12px; color: var(--ink-soft); margin-bottom: 10px;">
+              Clears all logged cycles for this tracker. Resets your streak, missed counts, and restarts Adapalene at the build-up phase.
+            </p>
+
+            ${state.confirmResetOpen ? `
+              <div class="confirm-box">
+                <div class="confirm-title">Clear all cycles and restart streak?</div>
+                <div class="confirm-msg">This cannot be undone. All your past check-in logs will be permanently deleted.</div>
+                <div class="confirm-actions">
+                  <button class="btn-danger" id="btnConfirmReset">Yes, Reset Everything</button>
+                  <button class="btn-secondary" id="btnCancelReset">Cancel</button>
+                </div>
+              </div>
+            ` : `
+              <button class="btn-danger" id="btnOpenResetConfirm">
+                Reset Tracker History
+              </button>
+            `}
+          </div>
+        ` : `
+          <div style="margin-top: 16px; text-align: center;">
+            <button class="btn-secondary" id="btnPartnerSignOutModal" style="width: 100%;">
+              Sign Out
             </button>
-          `}
-        </div>
+          </div>
+        `}
       </div>
     </div>
   `;
@@ -1206,6 +1312,7 @@ function renderSettingsModal(tracker, storageState) {
 function attachDashboardListeners(isOwner, tracker, cycles) {
   // Sign out
   document.getElementById('btnSignOut')?.addEventListener('click', handleSignOut);
+  document.getElementById('btnPartnerSignOutModal')?.addEventListener('click', handleSignOut);
 
   // Settings trigger
   document.getElementById('btnOpenSettings')?.addEventListener('click', () => {
@@ -1221,6 +1328,118 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
       render();
     });
   });
+
+  // Partner Nudge Button (Partner View)
+  document.getElementById('btnSendPartnerNudge')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btnSendPartnerNudge');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Sending nudge...';
+    }
+    try {
+      await state.storage.sendPartnerNudge(tracker.id);
+      showToast(`Push nudge sent to ${escapeHtml(tracker?.partner_name || 'Owner')}!`);
+      render();
+    } catch (err) {
+      console.error('Partner nudge error:', err);
+      showToast(err.message || 'Failed to send nudge.');
+      render();
+    }
+  });
+
+  // Settings Modal Listeners (Both Owner & Partner)
+  if (state.settingsOpen) {
+    document.getElementById('btnCloseSettings')?.addEventListener('click', () => {
+      state.settingsOpen = false;
+      state.confirmResetOpen = false;
+      state.confirmRevokeOpen = false;
+      render();
+    });
+
+    // Push notification toggle button
+    document.getElementById('btnEnablePush')?.addEventListener('click', async () => {
+      const btn = document.getElementById('btnEnablePush');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Enabling...';
+      }
+      try {
+        await subscribeToPush(state.storage);
+        showToast('Push notifications enabled on this device!');
+        render();
+      } catch (err) {
+        console.error('Push enable error:', err);
+        showToast(err.message || 'Failed to enable push notifications.');
+        render();
+      }
+    });
+
+    // PWA Install button
+    document.getElementById('btnTriggerInstall')?.addEventListener('click', async () => {
+      if (state.deferredInstallPrompt) {
+        state.deferredInstallPrompt.prompt();
+        const choice = await state.deferredInstallPrompt.userChoice;
+        if (choice.outcome === 'accepted') {
+          showToast('Skin Streak installed!');
+        }
+        state.deferredInstallPrompt = null;
+        render();
+      }
+    });
+
+    if (isOwner) {
+      // Situational Cue preset pills
+      document.querySelectorAll('.btn-cue-preset').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const targetId = btn.getAttribute('data-target');
+          const val = btn.getAttribute('data-val');
+          const input = document.getElementById(targetId);
+          if (input && val) {
+            input.value = val;
+          }
+        });
+      });
+
+      document.getElementById('settingsForm')?.addEventListener('submit', handleSaveSettings);
+      document.getElementById('btnGenerateInvite')?.addEventListener('click', handleGenerateInvite);
+
+      if (state.inviteLinkData) {
+        document.getElementById('btnCopyInvite')?.addEventListener('click', () => {
+          handleCopyInviteLink(state.inviteLinkData.inviteUrl);
+        });
+
+        document.getElementById('btnShareInviteWhatsApp')?.addEventListener('click', () => {
+          const text = `Hey! Here's your invite link to be my accountability partner on Skin Streak: ${state.inviteLinkData.inviteUrl}`;
+          openWhatsApp(tracker?.partner_phone, text);
+        });
+      }
+
+      // Revoke partner confirmation
+      document.getElementById('btnRevokePartner')?.addEventListener('click', () => {
+        state.confirmRevokeOpen = true;
+        render();
+      });
+
+      document.getElementById('btnConfirmRevoke')?.addEventListener('click', handleRevokePartner);
+      document.getElementById('btnCancelRevoke')?.addEventListener('click', () => {
+        state.confirmRevokeOpen = false;
+        render();
+      });
+
+      // Reset confirmation
+      document.getElementById('btnOpenResetConfirm')?.addEventListener('click', () => {
+        state.confirmResetOpen = true;
+        render();
+      });
+
+      document.getElementById('btnConfirmReset')?.addEventListener('click', handleResetCycles);
+      document.getElementById('btnCancelReset')?.addEventListener('click', () => {
+        state.confirmResetOpen = false;
+        render();
+      });
+    }
+  }
 
   if (!isOwner) return;
 
@@ -1267,68 +1486,6 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
       await state.storage.markPartnerAlerted(openC.id);
     }
   });
-
-  // Settings Modal Listeners
-  if (state.settingsOpen) {
-    document.getElementById('btnCloseSettings')?.addEventListener('click', () => {
-      state.settingsOpen = false;
-      state.confirmResetOpen = false;
-      state.confirmRevokeOpen = false;
-      render();
-    });
-
-    // Situational Cue preset pills
-    document.querySelectorAll('.btn-cue-preset').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const targetId = btn.getAttribute('data-target');
-        const val = btn.getAttribute('data-val');
-        const input = document.getElementById(targetId);
-        if (input && val) {
-          input.value = val;
-        }
-      });
-    });
-
-    document.getElementById('settingsForm')?.addEventListener('submit', handleSaveSettings);
-
-    document.getElementById('btnGenerateInvite')?.addEventListener('click', handleGenerateInvite);
-
-    if (state.inviteLinkData) {
-      document.getElementById('btnCopyInvite')?.addEventListener('click', () => {
-        handleCopyInviteLink(state.inviteLinkData.inviteUrl);
-      });
-
-      document.getElementById('btnShareInviteWhatsApp')?.addEventListener('click', () => {
-        const text = `Hey! Here's your invite link to be my accountability partner on Skin Streak: ${state.inviteLinkData.inviteUrl}`;
-        openWhatsApp(tracker?.partner_phone, text);
-      });
-    }
-
-    // Revoke partner confirmation
-    document.getElementById('btnRevokePartner')?.addEventListener('click', () => {
-      state.confirmRevokeOpen = true;
-      render();
-    });
-
-    document.getElementById('btnConfirmRevoke')?.addEventListener('click', handleRevokePartner);
-    document.getElementById('btnCancelRevoke')?.addEventListener('click', () => {
-      state.confirmRevokeOpen = false;
-      render();
-    });
-
-    // Reset confirmation
-    document.getElementById('btnOpenResetConfirm')?.addEventListener('click', () => {
-      state.confirmResetOpen = true;
-      render();
-    });
-
-    document.getElementById('btnConfirmReset')?.addEventListener('click', handleResetCycles);
-    document.getElementById('btnCancelReset')?.addEventListener('click', () => {
-      state.confirmResetOpen = false;
-      render();
-    });
-  }
 }
 
 function escapeHtml(str) {

@@ -25,16 +25,17 @@ create table if not exists public.trackers (
   after_sleep_cue text default 'right when I wake up',
   before_sleep_cue text default 'right before I get into bed',
   grace_log jsonb default '[]'::jsonb,
-  partner_alerted_cycle_id uuid,
+  last_partner_nudge_at timestamptz,
   created_at timestamptz default now()
 );
 
--- Ensure miss-prevention columns exist on existing deployments:
+-- Ensure miss-prevention & nudge columns exist on existing deployments:
 alter table public.trackers
   add column if not exists after_sleep_cue text default 'right when I wake up',
   add column if not exists before_sleep_cue text default 'right before I get into bed',
   add column if not exists grace_log jsonb default '[]'::jsonb,
-  add column if not exists partner_alerted_cycle_id uuid;
+  add column if not exists partner_alerted_cycle_id uuid,
+  add column if not exists last_partner_nudge_at timestamptz;
 
 -- Cycles table (sleep-cycle events: After Sleep and Before Sleep)
 create table if not exists public.cycles (
@@ -44,6 +45,15 @@ create table if not exists public.cycles (
   before_sleep_at timestamptz,
   adapalene boolean,               -- null until before_sleep_at is set
   created_at timestamptz default now()
+);
+
+-- Push Subscriptions table (device tokens for FCM / Web Push)
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  fcm_token text not null,
+  created_at timestamptz default now(),
+  unique (user_id, fcm_token)
 );
 
 -- Partner Invites table (single-use 7-day tokens)
@@ -69,6 +79,7 @@ create index if not exists idx_cycles_tracker_id on public.cycles(tracker_id, cr
 create index if not exists idx_invites_token on public.partner_invites(token);
 create index if not exists idx_tracker_partners_user on public.tracker_partners(partner_user_id);
 create index if not exists idx_trackers_owner on public.trackers(owner_id);
+create index if not exists idx_push_subs_user on public.push_subscriptions(user_id);
 
 -- ==============================================================================
 -- 2. Row Level Security (RLS)
@@ -78,6 +89,17 @@ alter table public.trackers enable row level security;
 alter table public.cycles enable row level security;
 alter table public.partner_invites enable row level security;
 alter table public.tracker_partners enable row level security;
+alter table public.push_subscriptions enable row level security;
+
+-- ------------------------------------------------------------------------------
+-- RLS: push_subscriptions
+-- Users can only view, insert, update, and delete their own device push tokens
+-- ------------------------------------------------------------------------------
+drop policy if exists "Push subs owner all" on public.push_subscriptions;
+create policy "Push subs owner all"
+  on public.push_subscriptions for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
 
 -- ------------------------------------------------------------------------------
 -- RLS: trackers
@@ -126,6 +148,7 @@ select
   t.before_sleep_cue,
   t.grace_log,
   t.partner_alerted_cycle_id,
+  t.last_partner_nudge_at,
   t.created_at,
   case
     when t.owner_id = auth.uid() then 'owner'
@@ -312,6 +335,94 @@ end;
 $$;
 
 grant execute on function public.redeem_partner_invite(text) to authenticated;
+
+-- ------------------------------------------------------------------------------
+-- Stored Procedure: record_partner_nudge
+-- Runs as SECURITY DEFINER so that an authenticated Partner can trigger a push
+-- nudge to the Owner without directly reading the Owner's push tokens or phone.
+-- Enforces a 1-hour rate limit on trackers.last_partner_nudge_at.
+-- ------------------------------------------------------------------------------
+create or replace function public.record_partner_nudge(p_tracker_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_user_id uuid;
+  v_tracker record;
+  v_partner_link record;
+  v_cooldown_interval interval := interval '1 hour';
+  v_fcm_tokens text[];
+  v_open_cycle record;
+  v_pending_slot text;
+begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    return jsonb_build_object('success', false, 'error', 'Authentication required.');
+  end if;
+
+  -- 1. Verify tracker exists
+  select * into v_tracker from public.trackers where id = p_tracker_id;
+  if v_tracker.id is null then
+    return jsonb_build_object('success', false, 'error', 'Tracker not found.');
+  end if;
+
+  -- 2. Verify the caller is an active partner on this tracker
+  select * into v_partner_link
+  from public.tracker_partners
+  where tracker_id = p_tracker_id and partner_user_id = v_user_id;
+
+  if v_partner_link.tracker_id is null then
+    return jsonb_build_object('success', false, 'error', 'You are not an authorized partner for this tracker.');
+  end if;
+
+  -- 3. Rate limiting check: at most 1 nudge per hour
+  if v_tracker.last_partner_nudge_at is not null and
+     (now() - v_tracker.last_partner_nudge_at) < v_cooldown_interval then
+    return jsonb_build_object(
+      'success', false,
+      'error', 'A nudge was already sent recently. You can nudge once per hour.',
+      'last_partner_nudge_at', v_tracker.last_partner_nudge_at,
+      'cooldown_remaining_seconds', extract(epoch from (v_tracker.last_partner_nudge_at + v_cooldown_interval - now()))::int
+    );
+  end if;
+
+  -- 4. Atomically update last_partner_nudge_at
+  update public.trackers
+  set last_partner_nudge_at = now()
+  where id = p_tracker_id;
+
+  -- 5. Fetch owner's push subscription tokens
+  select array_agg(fcm_token) into v_fcm_tokens
+  from public.push_subscriptions
+  where user_id = v_tracker.owner_id;
+
+  -- 6. Determine pending slot from latest cycle
+  select * into v_open_cycle
+  from public.cycles
+  where tracker_id = p_tracker_id
+  order by created_at desc
+  limit 1;
+
+  if v_open_cycle.id is not null and v_open_cycle.after_sleep_at is not null and v_open_cycle.before_sleep_at is null then
+    v_pending_slot := 'Before Sleep';
+  else
+    v_pending_slot := 'After Sleep';
+  end if;
+
+  return jsonb_build_object(
+    'success', true,
+    'nudged_at', now(),
+    'owner_id', v_tracker.owner_id,
+    'partner_name', coalesce(v_tracker.partner_name, 'Your partner'),
+    'pending_slot', v_pending_slot,
+    'fcm_tokens', coalesce(v_fcm_tokens, array[]::text[])
+  );
+end;
+$$;
+
+grant execute on function public.record_partner_nudge(uuid) to authenticated;
 
 -- ==============================================================================
 -- 4. Realtime Setup

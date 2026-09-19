@@ -22,7 +22,9 @@ import {
   computeRiskRingState,
   getGraceEligibility,
   computeCycleStreakWithGrace,
-  formatProactivePartnerAlert
+  formatProactivePartnerAlert,
+  canSendPartnerNudge,
+  formatPartnerNudgeMessage
 } from '../src/cycles.js';
 
 console.log('=== Running Skin Streak v3 Cycle Engine Tests ===');
@@ -566,6 +568,57 @@ assert.ok(alertMsg.includes('Could you check in on them?'));
 
 console.log('✓ Miss-prevention design engine & research mechanisms verified.');
 
-console.log('=== All 9 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 10. Partner-Initiated Nudge & PWA Push Notification Engine
+// -----------------------------------------------------------------------------
+console.log('Test 10: Partner-Initiated Nudge & PWA Push Notification Engine...');
+
+// 10a. canSendPartnerNudge cooldown logic
+const nowNudge = Date.now();
+
+// Never nudged before -> allowed
+const initialNudge = canSendPartnerNudge(null, nowNudge);
+assert.strictEqual(initialNudge.allowed, true);
+assert.strictEqual(initialNudge.remainingMinutes, 0);
+
+// Nudged 10 minutes ago -> blocked, ~50 minutes remaining
+const tenMinAgo = new Date(nowNudge - 10 * 60 * 1000).toISOString();
+const blockedNudge = canSendPartnerNudge(tenMinAgo, nowNudge);
+assert.strictEqual(blockedNudge.allowed, false);
+assert.strictEqual(blockedNudge.remainingMinutes, 50);
+assert.strictEqual(blockedNudge.remainingSeconds, 3000);
+
+// Nudged 59 minutes and 30 seconds ago -> blocked, 1 minute remaining
+const fiftyNineHalfAgo = new Date(nowNudge - (59 * 60 + 30) * 1000).toISOString();
+const almostReadyNudge = canSendPartnerNudge(fiftyNineHalfAgo, nowNudge);
+assert.strictEqual(almostReadyNudge.allowed, false);
+assert.strictEqual(almostReadyNudge.remainingMinutes, 1);
+assert.strictEqual(almostReadyNudge.remainingSeconds, 30);
+
+// Nudged 65 minutes ago -> allowed (> 1 hour cooldown)
+const sixtyFiveMinAgo = new Date(nowNudge - 65 * 60 * 1000).toISOString();
+const allowedNudge = canSendPartnerNudge(sixtyFiveMinAgo, nowNudge);
+assert.strictEqual(allowedNudge.allowed, true);
+assert.strictEqual(allowedNudge.remainingMinutes, 0);
+
+// Invalid date string -> fallback allowed
+assert.strictEqual(canSendPartnerNudge('invalid-date', nowNudge).allowed, true);
+
+// 10b. formatPartnerNudgeMessage formatting
+const nudgeMsg1 = formatPartnerNudgeMessage('Alex', 'beforeSleep');
+assert.strictEqual(nudgeMsg1, 'Alex thinks you might have forgotten your Before Sleep routine.');
+
+const nudgeMsg2 = formatPartnerNudgeMessage('Sam', 'afterSleep');
+assert.strictEqual(nudgeMsg2, 'Sam thinks you might have forgotten your After Sleep routine.');
+
+const nudgeMsg3 = formatPartnerNudgeMessage(null, 'routine');
+assert.strictEqual(nudgeMsg3, 'Your partner thinks you might have forgotten your routine.');
+
+const nudgeMsg4 = formatPartnerNudgeMessage('  Taylor  ', 'morning wash');
+assert.strictEqual(nudgeMsg4, 'Taylor thinks you might have forgotten your morning wash routine.');
+
+console.log('✓ Partner-Initiated Nudge & PWA Push Notification Engine verified.');
+
+console.log('=== All 10 Test Suites Passed Successfully! ===');
 
 
