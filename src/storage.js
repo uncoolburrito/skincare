@@ -84,6 +84,9 @@ export class StorageController {
     if (this.tracker) {
       await this.loadCycles();
       if (this.role === 'owner') {
+        if (this.cycles.length === 0) {
+          await this.autoMigrateLegacyLogs();
+        }
         await this.loadPartnerData();
       }
       this.setupRealtime();
@@ -195,6 +198,74 @@ export class StorageController {
     }
 
     this.cycles = data || [];
+  }
+
+  /**
+   * Automatically migrates legacy check-in logs from skin_streak_logs into the new cycles table
+   */
+  async autoMigrateLegacyLogs() {
+    if (!this.tracker || this.role !== 'owner' || this.cycles.length > 0) return;
+
+    try {
+      console.log('[StorageController] Checking for legacy logs to migrate...');
+      const { data: legacy, error } = await supabase
+        .from('skin_streak_logs')
+        .select('*')
+        .eq('id', 'd5167ad2d258c91a')
+        .maybeSingle();
+
+      if (!error && legacy && legacy.entries) {
+        const entries = legacy.entries;
+        const dates = Object.keys(entries).sort();
+        const toInsert = [];
+
+        for (const dStr of dates) {
+          const e = entries[dStr];
+          if (e.amAt && !e.pmAt) {
+            toInsert.push({
+              tracker_id: this.tracker.id,
+              after_sleep_at: e.amAt,
+              before_sleep_at: null,
+              adapalene: null,
+              created_at: e.amAt
+            });
+          } else if (!e.amAt && e.pmAt) {
+            toInsert.push({
+              tracker_id: this.tracker.id,
+              after_sleep_at: null,
+              before_sleep_at: e.pmAt,
+              adapalene: true,
+              created_at: e.pmAt
+            });
+          } else if (e.amAt && e.pmAt) {
+            toInsert.push({
+              tracker_id: this.tracker.id,
+              after_sleep_at: e.amAt,
+              before_sleep_at: e.pmAt,
+              adapalene: true,
+              created_at: e.amAt
+            });
+          }
+        }
+
+        if (toInsert.length > 0) {
+          console.log(`[StorageController] Migrating ${toInsert.length} legacy cycles...`);
+          const { data: inserted, error: insertErr } = await supabase
+            .from('cycles')
+            .insert(toInsert)
+            .select();
+
+          if (!insertErr && inserted) {
+            this.cycles = inserted.sort(
+              (a, b) => new Date(a.created_at) - new Date(b.created_at)
+            );
+            this.notify();
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[StorageController] Legacy auto-migration notice:', err);
+    }
   }
 
   /**
