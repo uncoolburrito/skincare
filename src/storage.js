@@ -105,6 +105,11 @@ export class StorageController {
 
     if (ownerErr) {
       console.warn('[StorageController] Error checking owner trackers:', ownerErr);
+      if (ownerErr.code === 'PGRST205' || ownerErr.message?.includes('schema cache')) {
+        this.tracker = null;
+        this.role = 'needs_schema';
+        return;
+      }
     }
 
     if (ownerTrackers && ownerTrackers.length > 0) {
@@ -122,6 +127,11 @@ export class StorageController {
 
     if (partnerErr) {
       console.warn('[StorageController] Error checking partner links:', partnerErr);
+      if (partnerErr.code === 'PGRST205' || partnerErr.message?.includes('schema cache')) {
+        this.tracker = null;
+        this.role = 'needs_schema';
+        return;
+      }
     }
 
     if (partnerLinks && partnerLinks.length > 0) {
@@ -156,7 +166,11 @@ export class StorageController {
     if (createErr) {
       console.error('[StorageController] Failed to create tracker for user:', createErr);
       this.tracker = null;
-      this.role = 'error';
+      if (createErr.code === 'PGRST205' || createErr.message?.includes('schema cache')) {
+        this.role = 'needs_schema';
+      } else {
+        this.role = 'error';
+      }
     } else {
       this.tracker = newTracker;
       this.role = 'owner';

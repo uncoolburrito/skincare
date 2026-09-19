@@ -395,6 +395,43 @@ function render() {
     return;
   }
 
+  // Schema setup required view
+  if (storageState.role === 'needs_schema') {
+    APP.innerHTML = `
+      <div class="auth-wrap">
+        <div class="auth-icon">🗄️</div>
+        <h2 class="auth-title">Database Setup Required</h2>
+        <p class="auth-desc">Your Supabase project is connected, but the 4 required tables have not been created yet.</p>
+        <div class="auth-card" style="text-align: left;">
+          <div style="font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 8px;">
+            One-Time Setup (takes 10 seconds):
+          </div>
+          <ol style="font-size: 13px; color: var(--ink-soft); padding-left: 20px; line-height: 1.6; margin-bottom: 16px;">
+            <li>Open your <a href="https://supabase.com/dashboard/project/whekrgnecterjouoyxer/sql" target="_blank" rel="noreferrer" style="color: var(--ink); font-weight: 600; text-decoration: underline;">Supabase SQL Editor</a>.</li>
+            <li>Click <strong>New query</strong>.</li>
+            <li>Paste the contents of <code>supabase_schema.sql</code> and click <strong>Run</strong>.</li>
+          </ol>
+          <button class="btn-primary" id="btnRefreshAfterSchema">
+            ✓ I've Run the SQL Schema (Reload)
+          </button>
+        </div>
+        <button id="btnSignOutFromSetup" style="font-size: 12px; color: var(--ink-soft); margin-top: 20px; text-decoration: underline; cursor: pointer; background: none; border: none;">
+          Sign Out
+        </button>
+      </div>
+    `;
+    document.getElementById('btnRefreshAfterSchema')?.addEventListener('click', () => {
+      state.loading = true;
+      render();
+      state.storage.init(state.user, state.pendingInviteToken).then(() => {
+        state.loading = false;
+        render();
+      });
+    });
+    document.getElementById('btnSignOutFromSetup')?.addEventListener('click', handleSignOut);
+    return;
+  }
+
   // Main App View (Owner or Partner)
   renderDashboard(storageState);
 }
