@@ -76,6 +76,38 @@ Traditional habit trackers make two fatal assumptions:
 
 ---
 
+## Algorithms & Behavioral Science Engineering
+
+Beyond standard habit tracking, Skin Streak runs three distinct computational engines designed for irregular schedules:
+
+### 1. Biological Progress Score (Dual Asymptotic Kinetics)
+Unlike streak counters that drop to zero on an accidental miss, the **Progress Score** ($0–100$) models real-world epidermal cellular turnover, follicular desquamation, and retinoid receptor saturation:
+- **Zero Database State**: Computed fresh on every render directly from chronological cycle history; never stored as a volatile running total.
+- **Asymptotic Gain ($\tau_{\text{gain}} = 60\text{ days}$)**:
+  $$\Delta P = g \cdot (100 - P), \quad g = 1 - e^{-1/60} \approx 0.01653$$
+  Early adherence yields rapid initial gains; approaching steady-state requires prolonged consistency. Complete cycles earn full gain ($+g(100 - P)$); partial/orphaned cycles earn half ($+0.5g(100 - P)$).
+- **Exponential Biological Decay ($\tau_{\text{decay}} = 58\text{ days}$)**:
+  $$P(t) = P_0 \cdot e^{-\Delta t / 58}$$
+  Models microcomedone reformation and desquamation slowdown during missed intervals.
+- **Clinical Phase Bands**: Maps score to biological milestones (Receptor Upregulation `0–39`, Keratinization Normalization `40–74`, Therapeutic Clarity Peak `75–94`, Epidermal Equilibrium `95–100`) accompanied by abstract radiant geometric SVG motifs.
+
+### 2. Research-Backed Miss-Prevention Engine
+Engineered to reduce actual missed routines before they occur, backed by behavioral science:
+- **Implementation Intentions (Gollwitzer 1999)**: Anchors routines to situational cues (*"right when my alarm rings"*, *"while morning coffee brews"*) rather than clock times, proven to boost follow-through 2–3x for irregular schedules.
+- **Personal Risk Ring (JITAI / Nahum-Shani 2018)**: Just-in-Time Adaptive Intervention that computes the user's rolling median waking and sleeping gaps. A dynamic SVG ring shifts through 3 visual buffer zones:
+  - **Healthy Buffer (Green)**: $< 70\%$ of typical personal gap elapsed.
+  - **Approaching Window (Amber)**: $70\%–99\%$ elapsed.
+  - **Past Typical Window (Red)**: $\ge 100\%$ elapsed, loss-framed against the current streak and score.
+- **Bounded Streak Grace (Herman & Polivy 1975, 2010 Restraint Theory)**: Prevents the destructive *"What-the-Hell Effect"* (where one lapse causes complete habit abandonment). Allows at most **1 shielded miss per rolling 30 real days** on the motivational streak counter, while the biological Progress Score remains strictly unshielded and decays honestly.
+- **Proactive Partner Escalation**: Auto-detects overdue routines past the personal gap (+2h buffer) with database deduplication (`partner_alerted_cycle_id`) to prevent duplicate pings.
+
+### 3. PWA & Native Android Push Architecture
+- **PWA Standalone Shell**: Web app manifest (`display: standalone`, `#FAF7F2`), adaptive maskable icon set, and service worker precaching for instant launch from the Android home screen.
+- **Web Push & FCM Subscriptions**: Device tokens registered via PushManager and stored in Supabase `public.push_subscriptions` with strict owner-only RLS.
+- **Partner-Initiated Nudge**: A `SECURITY DEFINER` stored procedure (`record_partner_nudge`) enforces a strict **1-hour atomic cooldown** on `trackers.last_partner_nudge_at` and dispatches native OS push notifications to the owner's devices without exposing contact info or device tokens to the partner.
+
+---
+
 ## Authentication & Security
 
 ```text
@@ -171,20 +203,28 @@ npm run dev
 
 ```text
 skincare/
-├── index.html              # HTML entry point with Google Fonts
-├── supabase_schema.sql     # Database schema, RLS policies & SECURITY DEFINER RPC
-├── vercel.json             # SPA routing rewrite configuration
+├── index.html              # HTML entry point with PWA meta & Google Fonts
+├── supabase_schema.sql     # Schema, RLS policies, trackers_view & SECURITY DEFINER RPCs
+├── vercel.json             # SPA routing rewrite & API endpoint passthrough
 ├── vite.config.js          # Vite build configuration
+├── api/
+│   ├── send-push.js        # Serverless FCM / Web Push dispatcher
+│   └── send-partner-nudge.js # Partner nudge handler with JWT & rate-limit validation
+├── public/
+│   ├── manifest.json       # PWA manifest with gcm_sender_id & theme tokens
+│   ├── sw.js               # Service worker: precache, push handler & notificationclick
+│   └── icons/              # Standard & maskable icons (192, 512, badge-96)
 ├── src/
-│   ├── main.js             # Application controller, routing & view rendering
-│   ├── cycles.js           # Core cycle filling, adapalene schedule & streak engine
+│   ├── main.js             # Application controller, routing, PWA prompt & views
+│   ├── cycles.js           # Progress Score, JITAI Risk Ring, Adapalene & Grace algorithms
+│   ├── push.js             # PushManager registration & FCM token acquisition
 │   ├── auth.js             # Supabase Auth magic-link & invite token handler
-│   ├── storage.js          # Role discovery, cycles CRUD & Realtime subscriptions
-│   └── style.css           # Design tokens, Fraunces/Sora styling & timeline layout
+│   ├── storage.js          # Role discovery, cycles CRUD, push sync & Realtime subscriptions
+│   └── style.css           # Design tokens, Fraunces/Sora styling, Risk Ring & PWA cards
 ├── test/
-│   └── cycles.test.js      # Comprehensive automated test suite
+│   └── cycles.test.js      # 10 comprehensive automated logic & algorithm test suites
 └── scripts/
-    └── check-reminders.js  # Scheduled hourly reminder script (CallMeBot webhook)
+    └── check-reminders.js  # Scheduled hourly reminder script (Push + WhatsApp)
 ```
 
 ---
