@@ -130,6 +130,42 @@ sequenceDiagram
 
 ---
 
+## Android Installation & Push Notifications Guide
+
+Skin Streak is engineered as a Progressive Web App (PWA) with native-grade Web Push and Firebase Cloud Messaging (FCM) integration. It delivers real lock-screen banners and phone buzzes on Android without requiring an app store download.
+
+### 1. Install as an App on Android
+1. Open the web app in **Google Chrome** on your Android device (e.g. `https://skincare-eight-iota.vercel.app`).
+2. An in-app banner will appear at the top: **"Install Skin Streak on Android for a full-screen experience"** &rarr; tap **"Install App"**.
+3. *Alternative*: Tap Chrome's three-dot menu (**⋮**) in the top-right corner and select **"Add to Home screen"** or **"Install app"**.
+4. Skin Streak will now appear on your home screen and app drawer with a full-screen standalone frame (no browser URL bar or navigation buttons).
+
+### 2. Enable Push Notifications
+1. Open Skin Streak from your home screen icon.
+2. Tap the **Settings** gear icon (⚙️) in the top-right header.
+3. Scroll down to the **Push Notifications & Install** section.
+4. Tap **"Enable Push Notifications"**.
+5. When Chrome prompts: *"skincare-eight-iota.vercel.app wants to send you notifications"*, tap **Allow**.
+6. The status pill will immediately switch to a green **Active** badge.
+
+### 3. Verify Your Device Token
+- Tap the **"Test"** button in Settings.
+- You will immediately receive a system notification:  
+  `Skin Streak ✨ — Push notifications are working on your Android device!`
+- Tapping the notification opens the app directly to your routine.
+
+### 4. How Push Notifications Fire in Practice
+- **Automated Overdue Nudges**: If one half of a cycle has been open for longer than your configured threshold (default: 14 hours, or your personalized waking/sleeping gap + 2h safety buffer), the background reminder engine dispatches a notification directly to your device.
+- **Partner-Initiated "Did You Forget?" Nudge**: If your accountability partner opens their read-only view and notices you haven't checked in, they can tap **"💬 Nudge [Name]"**. This executes a secure serverless procedure that buzzes your phone with an instant notification, protected by a strict 1-hour atomic cooldown.
+
+### 5. Troubleshooting (Android)
+- **Permission was blocked**: If you previously tapped "Block", tap the padlock/tune icon on the left of Chrome's URL bar &rarr; **Permissions** &rarr; toggle **Notifications** on.
+- **Notifications delayed or silenced by OS**: Ensure Android's Battery Optimization or "Deep Sleep" isn't putting Chrome / PWA to sleep:
+  - Go to Android **Settings** &rarr; **Apps** &rarr; **Skin Streak** (or Chrome) &rarr; **Battery** &rarr; select **"Unrestricted"** or **"Optimized"**.
+  - Ensure Android's **Do Not Disturb** mode isn't muting alert banners.
+
+---
+
 ## Authentication & Security
 
 ```text
