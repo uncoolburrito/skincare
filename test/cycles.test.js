@@ -12,7 +12,12 @@ import {
   checkAdaptiveNudge,
   buildCycleTimeline,
   formatWhatsAppMessage,
-  formatManualWhatsAppMessage
+  formatManualWhatsAppMessage,
+  computeProgressScore,
+  getProgressMilestone,
+  TAU_GAIN,
+  TAU_DECAY,
+  decayFactor
 } from '../src/cycles.js';
 
 console.log('=== Running Skin Streak v3 Cycle Engine Tests ===');
@@ -314,5 +319,109 @@ assert.strictEqual(phase.key, 'build-up');
 
 console.log('✓ Guide card state reconciliation verified.');
 
-console.log('=== All 7 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 8. Progress Score Algorithm & Sanity-Check Fixtures
+// -----------------------------------------------------------------------------
+console.log('Test 8: Progress Score algorithm & sanity-check fixtures...');
+
+// Constants verification
+assert.strictEqual(TAU_GAIN, 60);
+assert.strictEqual(TAU_DECAY, 58);
+
+// Empty state
+assert.strictEqual(computeProgressScore([]).score, 0);
+assert.strictEqual(computeProgressScore([]).roundedScore, 0);
+assert.strictEqual(computeProgressScore([]).milestone.band, '0-39');
+assert.strictEqual(computeProgressScore([]).milestone.label, 'Just started');
+
+// Fixture 1: 30 days perfect consistency (P is about 39)
+const c30 = Array.from({ length: 30 }, (_, i) => ({
+  id: `c30_${i}`,
+  after_sleep_at: `2026-01-${String(i + 1).padStart(2, '0')}T08:00:00Z`,
+  before_sleep_at: `2026-01-${String(i + 1).padStart(2, '0')}T23:00:00Z`,
+  adapalene: i % 2 === 0
+}));
+const res30 = computeProgressScore(c30);
+assert.strictEqual(res30.roundedScore, 39);
+assert.ok(res30.score >= 39.0 && res30.score <= 39.7, `Expected ~39, got ${res30.score}`);
+assert.strictEqual(res30.milestone.band, '0-39');
+
+// Fixture 2: 42 days (6 weeks) perfect consistency (P is about 50)
+const c42 = Array.from({ length: 42 }, (_, i) => ({
+  id: `c42_${i}`,
+  after_sleep_at: 'T1',
+  before_sleep_at: 'T2',
+  adapalene: i % 2 === 0
+}));
+const res42 = computeProgressScore(c42);
+assert.strictEqual(res42.roundedScore, 50);
+assert.ok(res42.score >= 50.0 && res42.score <= 50.7, `Expected ~50, got ${res42.score}`);
+assert.strictEqual(res42.milestone.band, '40-74');
+assert.strictEqual(res42.milestone.label, 'Initial improvement window');
+
+// Fixture 3: 84 days (12 weeks) perfect consistency (P is about 75)
+const c84 = Array.from({ length: 84 }, (_, i) => ({
+  id: `c84_${i}`,
+  after_sleep_at: 'T1',
+  before_sleep_at: 'T2',
+  adapalene: true
+}));
+const res84 = computeProgressScore(c84);
+assert.strictEqual(res84.roundedScore, 75);
+assert.ok(res84.score >= 75.0 && res84.score <= 75.7, `Expected ~75, got ${res84.score}`);
+assert.strictEqual(res84.milestone.band, '75-94');
+assert.strictEqual(res84.milestone.label, 'Clearest change window');
+
+// Fixture 4: 180 days (6 months) perfect consistency (P is about 95)
+const c180 = Array.from({ length: 180 }, (_, i) => ({
+  id: `c180_${i}`,
+  after_sleep_at: 'T1',
+  before_sleep_at: 'T2',
+  adapalene: true
+}));
+const res180 = computeProgressScore(c180);
+assert.strictEqual(res180.roundedScore, 95);
+assert.ok(res180.score >= 94.8 && res180.score <= 95.3, `Expected ~95, got ${res180.score}`);
+assert.strictEqual(res180.milestone.band, '95-100');
+assert.strictEqual(res180.milestone.label, 'Long-term maintenance');
+
+// Fixture 5: One single missed cycle at P=75 drops to about 73.7
+const c84_1miss = [...c84, { status: 'miss', elapsedDays: 1 }];
+const res1miss = computeProgressScore(c84_1miss);
+assert.ok(res1miss.score >= 73.5 && res1miss.score <= 74.2, `Expected ~73.7, got ${res1miss.score}`);
+assert.strictEqual(Math.round(75 * decayFactor(1) * 10) / 10, 73.7);
+
+// Fixture 6: 7 consecutive missed cycles at P=75 drops to about 66.5
+const c84_7misses = [...c84, { status: 'miss', elapsedDays: 7 }];
+const res7miss = computeProgressScore(c84_7misses);
+assert.ok(res7miss.score >= 66.2 && res7miss.score <= 67.0, `Expected ~66.5, got ${res7miss.score}`);
+assert.strictEqual(Math.round(75 * decayFactor(7) * 10) / 10, 66.5);
+
+// Fixture 7: About 40 consecutive missed cycles at P=75 drops to about 37.5
+const c84_40misses = [...c84, { status: 'miss', elapsedDays: 40 }];
+const res40miss = computeProgressScore(c84_40misses);
+assert.ok(res40miss.score >= 37.0 && res40miss.score <= 38.0, `Expected ~37.5, got ${res40miss.score}`);
+assert.strictEqual(Math.round(75 * decayFactor(40) * 10) / 10, 37.6);
+
+// Design Decision 1: Intentional Rest Night parity with Adapalene night
+const adapaleneNight = [{ id: 'a1', after_sleep_at: 'T1', before_sleep_at: 'T2', adapalene: true }];
+const restNight = [{ id: 'r1', after_sleep_at: 'T1', before_sleep_at: 'T2', adapalene: false }];
+assert.strictEqual(computeProgressScore(adapaleneNight).score, computeProgressScore(restNight).score);
+
+// Partial credit: exactly one half filled earns 0.5 * g * (100 - P)
+const partialNight = [{ id: 'p1', after_sleep_at: 'T1', before_sleep_at: null, isResolved: true, adapalene: null }];
+const g = 1 - Math.exp(-1 / 60);
+assert.ok(Math.abs(computeProgressScore(partialNight).score - (0.5 * g * 100)) < 0.0001);
+
+// Grace period: open in-progress cycle does not score until resolved
+const withOpenCycle = [
+  ...c30,
+  { id: 'open_today', after_sleep_at: '2026-02-01T08:00:00Z', before_sleep_at: null, adapalene: null }
+];
+assert.strictEqual(computeProgressScore(withOpenCycle).score, computeProgressScore(c30).score);
+
+console.log('✓ Progress Score algorithm & sanity-check fixtures verified.');
+
+console.log('=== All 8 Test Suites Passed Successfully! ===');
+
 

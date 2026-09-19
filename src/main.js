@@ -32,7 +32,10 @@ import {
   formatDateTime,
   formatWhatsAppMessage,
   formatManualWhatsAppMessage,
-  getAfterSleepGuide
+  getAfterSleepGuide,
+  computeProgressScore,
+  getProgressMilestone,
+  renderProgressMotif
 } from './cycles.js';
 
 // Application State
@@ -581,6 +584,7 @@ function renderDashboard(storageState) {
   const missed = computeMissedCycles(cycles);
   const adapalenePhase = computeAdapalenePhase(cycles);
   const tonightPlan = computeTonightPlan(cycles);
+  const progress = computeProgressScore(cycles);
   const openCycle = getOpenCycle(cycles);
   const nudge = checkAdaptiveNudge(cycles, tracker?.nudge_threshold_hours || 14);
 
@@ -679,6 +683,39 @@ function renderDashboard(storageState) {
           <div class="stat-val">${adapalenePhase.count}</div>
           <div class="stat-lbl">Adapalene</div>
         </div>
+      </div>
+    </div>
+
+    <!-- Progress Score Card (Dermatological Cumulative Saturation) -->
+    <div class="progress-card">
+      <div class="progress-card-top">
+        <div class="progress-header-info">
+          <span class="progress-tag">Cumulative Retinoid Progress</span>
+          <h3 class="progress-title">${escapeHtml(progress.milestone.label)}</h3>
+        </div>
+        <div class="progress-motif-wrap">
+          ${renderProgressMotif(progress.score)}
+        </div>
+      </div>
+      <div class="progress-main-row">
+        <div class="progress-score-num">${progress.roundedScore}</div>
+        <div class="progress-score-denom">/ 100</div>
+        <span
+          class="progress-milestone-badge"
+          style="background: ${progress.milestone.softColor}; color: ${progress.milestone.color}; border: 1px solid ${progress.milestone.color}33;"
+        >
+          ● Band ${escapeHtml(progress.milestone.band)}
+        </span>
+      </div>
+      <div class="progress-bar-track">
+        <div
+          class="progress-bar-fill"
+          style="width: ${progress.score}%; background: ${progress.milestone.gradient};"
+        ></div>
+      </div>
+      <div class="progress-card-footer">
+        <strong>${escapeHtml(progress.milestone.phaseName)}:</strong>
+        ${escapeHtml(progress.milestone.description)}
       </div>
     </div>
 

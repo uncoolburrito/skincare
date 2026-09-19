@@ -496,3 +496,212 @@ export function formatManualWhatsAppMessage(cycles = []) {
 
   return `Skincare check-in: streak is ${streakTxt}.`;
 }
+
+// =============================================================================
+// 8. Progress Score Engine (Dermatological Cumulative Saturation Model)
+// =============================================================================
+
+export const TAU_GAIN = 60;   // days: cellular turnover & retinoid receptor saturation constant
+export const TAU_DECAY = 58;  // days: microcomedone rebound & barrier desaturation constant
+export const G_GAIN = 1 - Math.exp(-1 / TAU_GAIN); // approx 0.01653
+
+/**
+ * Exponential decay factor over elapsed days
+ */
+export function decayFactor(days) {
+  return Math.exp(-days / TAU_DECAY);
+}
+
+/**
+ * Returns milestone band, label, description, and color palette
+ */
+export function getProgressMilestone(score) {
+  const rounded = Math.round(score);
+  if (rounded < 40) {
+    return {
+      band: '0-39',
+      label: 'Just started',
+      phaseName: 'Tolerance & Receptor Induction',
+      description: 'Building cellular tolerance and establishing initial barrier routine.',
+      color: '#D97706',
+      softColor: '#FEF3C7',
+      gradient: 'linear-gradient(135deg, #F59E0B, #D97706)'
+    };
+  }
+  if (rounded < 75) {
+    return {
+      band: '40-74',
+      label: 'Initial improvement window',
+      phaseName: 'Microcomedone Clearance',
+      description: 'Accelerated stratum corneum renewal; deep microcomedone expulsion underway.',
+      color: '#0D9488',
+      softColor: '#CCFBF1',
+      gradient: 'linear-gradient(135deg, #14B8A6, #0D9488)'
+    };
+  }
+  if (rounded < 95) {
+    return {
+      band: '75-94',
+      label: 'Clearest change window',
+      phaseName: 'Therapeutic Clarity Peak',
+      description: 'Peak therapeutic efficacy; sustained follicular desquamation and visible clarity.',
+      color: '#2563EB',
+      softColor: '#DBEAFE',
+      gradient: 'linear-gradient(135deg, #3B82F6, #2563EB)'
+    };
+  }
+  return {
+    band: '95-100',
+    label: 'Long-term maintenance',
+    phaseName: 'Epidermal Equilibrium',
+    description: 'Steady-state epidermal homeostasis; chronic microcomedone suppression.',
+    color: '#059669',
+    softColor: '#D1FAE5',
+    gradient: 'linear-gradient(135deg, #10B981, #059669)'
+  };
+}
+
+/**
+ * Renders an abstract, non-photographic geometric bloom/glow motif SVG.
+ * Reflects radiance and cellular renewal without faces or skin photography.
+ */
+export function renderProgressMotif(score) {
+  const rounded = Math.round(score);
+  const milestone = getProgressMilestone(score);
+  const scale = 0.75 + (rounded / 100) * 0.45; // 0.75 to 1.20
+  const ringCount = rounded < 40 ? 2 : rounded < 75 ? 3 : rounded < 95 ? 4 : 5;
+
+  const rings = Array.from({ length: ringCount }).map((_, idx) => {
+    const r = 8 + (idx * 5.2) * (scale / 1.1);
+    const opacity = 0.25 + (idx / ringCount) * 0.55;
+    const dash = idx % 2 === 0 ? '3 3' : 'none';
+    return `<circle cx="32" cy="32" r="${r.toFixed(1)}" stroke="${milestone.color}" stroke-width="1.4" stroke-dasharray="${dash}" stroke-opacity="${opacity}" fill="none" />`;
+  }).join('');
+
+  return `
+    <svg class="progress-motif-svg" viewBox="0 0 64 64" width="52" height="52" aria-hidden="true">
+      <defs>
+        <radialGradient id="bloomGlow_${rounded}" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="${milestone.color}" stop-opacity="0.45" />
+          <stop offset="60%" stop-color="${milestone.color}" stop-opacity="0.12" />
+          <stop offset="100%" stop-color="${milestone.color}" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx="32" cy="32" r="30" fill="url(#bloomGlow_${rounded})" />
+      ${rings}
+      <circle cx="32" cy="32" r="3.5" fill="${milestone.color}" />
+      <circle cx="32" cy="32" r="1.5" fill="#FFFDF8" />
+    </svg>
+  `;
+}
+
+/**
+ * Computes the Cumulative Progress Score (0-100) dynamically from cycles history.
+ *
+ * Algorithm:
+ * - Constants: TAU_GAIN = 60, TAU_DECAY = 58, g = 1 - e^(-1/TAU_GAIN)
+ * - Chronological walk of past resolved cycles (skips still-open cycle).
+ * - COMPLETE (both halves filled): P = P + g * (100 - P)
+ *   (Rest nights and Adapalene nights earn identical growth credit)
+ * - PARTIAL (one half filled, orphaned miss): P = P + 0.5 * g * (100 - P)
+ * - FULL MISS (neither half filled or >= 1.5 days gap between same-type check-ins):
+ *   P = P * decayFactor(elapsedDays)
+ */
+export function computeProgressScore(cycles = []) {
+  if (!cycles || cycles.length === 0) {
+    return {
+      score: 0,
+      roundedScore: 0,
+      milestone: getProgressMilestone(0),
+      tauGain: TAU_GAIN,
+      tauDecay: TAU_DECAY
+    };
+  }
+
+  // Grace period: skip the current still-open cycle (if in progress, waiting to resolve)
+  let evalCycles = cycles;
+  const lastIndex = cycles.length - 1;
+  const last = cycles[lastIndex];
+
+  if (last && !last.isResolved && !last.fullMiss && last.status !== 'miss') {
+    // If last cycle has exactly one half filled, it's currently in progress
+    const isInProgress = (last.after_sleep_at && !last.before_sleep_at) || (!last.after_sleep_at && last.before_sleep_at);
+    if (isInProgress) {
+      evalCycles = cycles.slice(0, lastIndex);
+    }
+  }
+
+  if (evalCycles.length === 0) {
+    return {
+      score: 0,
+      roundedScore: 0,
+      milestone: getProgressMilestone(0),
+      tauGain: TAU_GAIN,
+      tauDecay: TAU_DECAY
+    };
+  }
+
+  let P = 0;
+  let prevTimestamp = null;
+  let prevType = null;
+
+  for (let i = 0; i < evalCycles.length; i++) {
+    const c = evalCycles[i];
+
+    // Explicit full miss object in history
+    const isExplicitMiss =
+      (!c.after_sleep_at && !c.before_sleep_at) ||
+      c.status === 'miss' ||
+      c.type === 'miss' ||
+      c.fullMiss === true;
+
+    if (isExplicitMiss) {
+      const elapsedDays = typeof c.elapsedDays === 'number' ? c.elapsedDays : 1;
+      P = P * decayFactor(elapsedDays);
+      prevTimestamp = null;
+      prevType = null;
+      continue;
+    }
+
+    // Determine current cycle timestamp & type for gap detection
+    const currTimestamp = c.after_sleep_at || c.before_sleep_at;
+    const currType = c.after_sleep_at ? 'afterSleep' : 'beforeSleep';
+
+    if (prevTimestamp && currTimestamp) {
+      const prevMs = new Date(prevTimestamp).getTime();
+      const currMs = new Date(currTimestamp).getTime();
+      if (!isNaN(prevMs) && !isNaN(currMs) && currMs > prevMs) {
+        const elapsedDays = (currMs - prevMs) / (24 * 3600 * 1000);
+        // If same check-in type occurred after >= 1.5 days, full cycle(s) were missed
+        if (prevType === currType && elapsedDays >= 1.5) {
+          const missedCycles = Math.round(elapsedDays) - 1;
+          if (missedCycles > 0) {
+            P = P * decayFactor(missedCycles);
+          }
+        }
+      }
+    }
+
+    if (isCycleComplete(c)) {
+      // COMPLETE: growth on compliance (whether Adapalene or intentional Rest)
+      P = P + G_GAIN * (100 - P);
+    } else {
+      // PARTIAL: orphaned cycle with only one half filled
+      P = P + 0.5 * G_GAIN * (100 - P);
+    }
+
+    prevTimestamp = currTimestamp;
+    prevType = currType;
+  }
+
+  // Bound to 0..100
+  P = Math.max(0, Math.min(100, P));
+
+  return {
+    score: P,
+    roundedScore: Math.round(P),
+    milestone: getProgressMilestone(P),
+    tauGain: TAU_GAIN,
+    tauDecay: TAU_DECAY
+  };
+}
