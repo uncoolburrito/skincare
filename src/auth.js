@@ -131,6 +131,54 @@ export async function sendMagicLink(email) {
 }
 
 /**
+ * Signs in with email and password (instant, bypasses email rate limits)
+ */
+export async function signInWithPassword(email, password) {
+  if (!email || !email.includes('@')) {
+    throw new Error('Please enter a valid email address.');
+  }
+  if (!password) {
+    throw new Error('Please enter your password.');
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: cleanEmail,
+    password
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to sign in with password.');
+  }
+
+  return data;
+}
+
+/**
+ * Signs up with email and password
+ */
+export async function signUpWithPassword(email, password) {
+  if (!email || !email.includes('@')) {
+    throw new Error('Please enter a valid email address.');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const { data, error } = await supabase.auth.signUp({
+    email: cleanEmail,
+    password
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to create account.');
+  }
+
+  return data;
+}
+
+/**
  * Gets the current active session
  */
 export async function getSession() {

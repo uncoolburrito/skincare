@@ -7,6 +7,8 @@
 
 import {
   sendMagicLink,
+  signInWithPassword,
+  signUpWithPassword,
   getCurrentUser,
   signOut,
   onAuthStateChange,
@@ -44,7 +46,8 @@ const state = {
   confirmRevokeOpen: false,
   magicLinkSentEmail: null,
   inviteLinkData: null,
-  pendingInviteToken: null
+  pendingInviteToken: null,
+  authMode: 'password' // 'password' | 'magic'
 };
 
 const APP = document.getElementById('app');
@@ -158,6 +161,66 @@ async function handleSendMagicLink(e) {
     if (btn) {
       btn.disabled = false;
       btn.textContent = 'Send Magic Link';
+    }
+  }
+}
+
+async function handlePasswordAuth(e, isSignUp = false) {
+  e.preventDefault();
+  const emailInput = document.getElementById('authEmailInput');
+  const passInput = document.getElementById('authPasswordInput');
+
+  const email = emailInput ? emailInput.value.trim() : '';
+  const password = passInput ? passInput.value : '';
+
+  if (!email || !email.includes('@')) {
+    showToast('Please enter a valid email address.');
+    return;
+  }
+  if (!password) {
+    showToast('Please enter your password.');
+    return;
+  }
+  if (isSignUp && password.length < 6) {
+    showToast('Password must be at least 6 characters.');
+    return;
+  }
+
+  const btnId = isSignUp ? 'btnPasswordSignUp' : 'btnPasswordSignIn';
+  const btn = document.getElementById(btnId);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = isSignUp ? 'Creating account…' : 'Signing in…';
+  }
+
+  try {
+    if (isSignUp) {
+      const data = await signUpWithPassword(email, password);
+      showToast('Account created successfully! Signing in...');
+      if (data.session) {
+        state.user = data.session.user;
+        await state.storage.init(data.session.user, state.pendingInviteToken);
+        render();
+      } else {
+        // Auto-login after sign-up
+        const signData = await signInWithPassword(email, password);
+        state.user = signData.user;
+        await state.storage.init(signData.user, state.pendingInviteToken);
+        render();
+      }
+    } else {
+      const data = await signInWithPassword(email, password);
+      state.user = data.user;
+      showToast('Signed in successfully!');
+      await state.storage.init(data.user, state.pendingInviteToken);
+      render();
+    }
+  } catch (err) {
+    console.error('Password auth error:', err);
+    showToast(err.message || 'Authentication failed.');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = isSignUp ? 'Create Account' : 'Sign In';
     }
   }
 }
@@ -364,6 +427,8 @@ function renderAuthScreen() {
     return;
   }
 
+  const isPassword = state.authMode === 'password';
+
   APP.innerHTML = `
     <div class="auth-wrap">
       <div class="auth-icon">✨</div>
@@ -373,35 +438,98 @@ function renderAuthScreen() {
       ${isInvite ? `
         <div class="auth-invite-banner">
           <strong>Accountability Partner Invite</strong><br>
-          You've been invited to view your friend's skincare log in real time. Enter your email below to connect!
+          You've been invited to view your friend's skincare log in real time. Enter your credentials below to connect!
         </div>
       ` : ''}
 
       <div class="auth-card">
-        <form id="authForm">
-          <div class="form-group">
-            <label class="form-label" for="authEmailInput">Your Email Address</label>
-            <input
-              type="email"
-              id="authEmailInput"
-              class="form-input"
-              placeholder="you@example.com"
-              required
-              autocomplete="email"
-            />
-          </div>
-          <button type="submit" id="btnSendMagic" class="btn-primary">
-            Send Magic Link
+        <div class="auth-tabs" style="display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 1px solid var(--line); padding-bottom: 12px;">
+          <button type="button" id="tabPassword" style="flex: 1; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s ease; ${isPassword ? 'background: var(--ink); color: #fff; border: 1px solid var(--ink);' : 'background: var(--panel); color: var(--ink-soft); border: 1px solid var(--line);'}">
+            🔑 Password
           </button>
-        </form>
-        <p style="font-size: 11px; color: var(--ink-light); margin-top: 14px; text-align: center;">
-          Passwordless & secure. Supabase email magic link authentication.
-        </p>
+          <button type="button" id="tabMagic" style="flex: 1; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s ease; ${!isPassword ? 'background: var(--ink); color: #fff; border: 1px solid var(--ink);' : 'background: var(--panel); color: var(--ink-soft); border: 1px solid var(--line);'}">
+            ✨ Magic Link
+          </button>
+        </div>
+
+        ${isPassword ? `
+          <form id="authPasswordForm">
+            <div class="form-group">
+              <label class="form-label" for="authEmailInput">Your Email</label>
+              <input
+                type="email"
+                id="authEmailInput"
+                class="form-input"
+                placeholder="you@example.com"
+                required
+                autocomplete="email"
+              />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="authPasswordInput">Password</label>
+              <input
+                type="password"
+                id="authPasswordInput"
+                class="form-input"
+                placeholder="••••••••"
+                required
+                autocomplete="current-password"
+              />
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 8px;">
+              <button type="submit" id="btnPasswordSignIn" class="btn-primary" style="flex: 1;">
+                Sign In
+              </button>
+              <button type="button" id="btnPasswordSignUp" class="btn-secondary" style="flex: 1; padding: 13px; font-size: 14px;">
+                Sign Up
+              </button>
+            </div>
+            <p style="font-size: 11px; color: var(--ink-light); margin-top: 14px; text-align: center;">
+              Instant sign in. No waiting for email verification or rate limits.
+            </p>
+          </form>
+        ` : `
+          <form id="authMagicForm">
+            <div class="form-group">
+              <label class="form-label" for="authEmailInput">Your Email Address</label>
+              <input
+                type="email"
+                id="authEmailInput"
+                class="form-input"
+                placeholder="you@example.com"
+                required
+                autocomplete="email"
+              />
+            </div>
+            <button type="submit" id="btnSendMagic" class="btn-primary">
+              Send Magic Link
+            </button>
+            <p style="font-size: 11px; color: var(--ink-light); margin-top: 14px; text-align: center;">
+              Passwordless & secure. Email magic link authentication.
+            </p>
+          </form>
+        `}
       </div>
     </div>
   `;
 
-  document.getElementById('authForm')?.addEventListener('submit', handleSendMagicLink);
+  // Tab switchers
+  document.getElementById('tabPassword')?.addEventListener('click', () => {
+    state.authMode = 'password';
+    render();
+  });
+  document.getElementById('tabMagic')?.addEventListener('click', () => {
+    state.authMode = 'magic';
+    render();
+  });
+
+  // Form handlers
+  if (isPassword) {
+    document.getElementById('authPasswordForm')?.addEventListener('submit', (e) => handlePasswordAuth(e, false));
+    document.getElementById('btnPasswordSignUp')?.addEventListener('click', (e) => handlePasswordAuth(e, true));
+  } else {
+    document.getElementById('authMagicForm')?.addEventListener('submit', handleSendMagicLink);
+  }
 }
 
 function renderDashboard(storageState) {
