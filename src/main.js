@@ -1093,6 +1093,10 @@ function renderSettingsModal(tracker, storageState) {
   const activeInvites = storageState.activeInvites || [];
   const inviteData = state.inviteLinkData;
   const notifPerm = getNotificationPermission();
+  const isStandalone = (typeof window !== 'undefined') && (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true
+  );
 
   return `
     <div class="modal-overlay" id="modalOverlay">
@@ -1205,7 +1209,12 @@ function renderSettingsModal(tracker, storageState) {
             </div>
             <div>
               ${notifPerm === 'granted' ? `
-                <span class="push-status-badge granted">Active</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span class="push-status-badge granted">Active</span>
+                  <button type="button" class="btn-push-action" id="btnTestPush" style="background: none; border: 1px solid var(--line); color: var(--ink); padding: 4px 8px; font-size: 11px; border-radius: var(--radius-sm); cursor: pointer;">
+                    Test
+                  </button>
+                </div>
               ` : (notifPerm === 'denied' ? `
                 <span class="push-status-badge denied">Blocked</span>
               ` : `
@@ -1216,17 +1225,27 @@ function renderSettingsModal(tracker, storageState) {
             </div>
           </div>
 
-          ${state.deferredInstallPrompt ? `
+          ${isStandalone ? `
+            <div style="margin-top: 10px; padding: 10px 14px; background: #ECFDF5; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); font-size: 12px; color: #065F46; display: flex; align-items: center; gap: 8px;">
+              <span>✓ Installed as app on this device</span>
+            </div>
+          ` : `
             <div class="pwa-install-banner" style="margin-top: 10px;">
               <div style="font-size: 12px; color: var(--ink);">
                 <strong>Install Skin Streak App</strong><br>
-                Add to Android home screen for one-tap tracking.
+                <span style="font-size: 11px; color: var(--ink-soft);">Add to Android home screen for one-tap tracking.</span>
               </div>
-              <button type="button" class="btn-install-pwa" id="btnTriggerInstall">
-                Install App
-              </button>
+              ${state.deferredInstallPrompt ? `
+                <button type="button" class="btn-install-pwa" id="btnTriggerInstall">
+                  Install App
+                </button>
+              ` : ''}
             </div>
-          ` : ''}
+            <div style="font-size: 11px; color: var(--ink-soft); margin-top: 6px; padding: 8px 12px; background: rgba(0,0,0,0.02); border: 1px solid var(--line); border-radius: var(--radius-sm); line-height: 1.45;">
+              📱 <strong>How to install on Android:</strong><br>
+              In Chrome, tap <strong>⋮</strong> (top-right menu) → select <strong>Install app</strong> (or <strong>Add to Home screen</strong>).
+            </div>
+          `}
         </div>
 
         ${isOwner ? `
@@ -1371,6 +1390,30 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
         console.error('Push enable error:', err);
         showToast(err.message || 'Failed to enable push notifications.');
         render();
+      }
+    });
+
+    // Test Push Notification button
+    document.getElementById('btnTestPush')?.addEventListener('click', async () => {
+      try {
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'SHOW_NOTIFICATION',
+            payload: {
+              title: 'Skin Streak ✨',
+              body: 'Push notifications are working on your Android device!'
+            }
+          });
+        } else if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Skin Streak ✨', {
+            body: 'Push notifications are working on your Android device!',
+            icon: '/icons/icon-192.png'
+          });
+        }
+        showToast('Test notification sent ✨');
+      } catch (err) {
+        console.error('Test notification error:', err);
+        showToast('Could not trigger test notification.');
       }
     });
 

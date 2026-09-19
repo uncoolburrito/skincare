@@ -110,6 +110,21 @@ self.addEventListener('push', (event) => {
   );
 });
 
+// Message event: Allow client to request showing a local test notification
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    const { title = 'Skin Streak ✨', body = 'Test notification' } = event.data.payload || {};
+    self.registration.showNotification(title, {
+      body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/badge-96.png',
+      tag: 'skin-streak-test',
+      data: { url: '/' },
+      vibrate: [100, 50, 100]
+    });
+  }
+});
+
 // Notification Click: Focus existing client or open new tab
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
@@ -129,3 +144,4 @@ self.addEventListener('notificationclick', (event) => {
     })
   );
 });
+
