@@ -17,7 +17,12 @@ import {
   getProgressMilestone,
   TAU_GAIN,
   TAU_DECAY,
-  decayFactor
+  decayFactor,
+  computePersonalGaps,
+  computeRiskRingState,
+  getGraceEligibility,
+  computeCycleStreakWithGrace,
+  formatProactivePartnerAlert
 } from '../src/cycles.js';
 
 console.log('=== Running Skin Streak v3 Cycle Engine Tests ===');
@@ -422,6 +427,145 @@ assert.strictEqual(computeProgressScore(withOpenCycle).score, computeProgressSco
 
 console.log('✓ Progress Score algorithm & sanity-check fixtures verified.');
 
-console.log('=== All 8 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 9. Miss-Prevention Design Engine
+// -----------------------------------------------------------------------------
+console.log('Test 9: Miss-prevention mechanisms (JITAI, Risk Ring, Bounded Grace, Proactive Alert)...');
+
+// 9a. JITAI Personal Gaps: Defaults when < 3 samples
+const emptyGaps = computePersonalGaps([]);
+assert.strictEqual(emptyGaps.typicalWakingGapHours, 15.0);
+assert.strictEqual(emptyGaps.typicalSleepingGapHours, 9.0);
+assert.strictEqual(emptyGaps.wakingSamples, 0);
+
+// 9b. JITAI Personal Gaps: Rolling average calculation from real cycles
+// Create 4 cycles with 16h waking gap and 8h sleeping gap
+const circadianCycles = [];
+let baseTime = new Date('2026-09-01T08:00:00Z').getTime();
+for (let i = 0; i < 4; i++) {
+  const afterAt = new Date(baseTime).toISOString();
+  const beforeAt = new Date(baseTime + 16 * 3600000).toISOString(); // 16h waking gap
+  circadianCycles.push({
+    id: `circ_${i}`,
+    after_sleep_at: afterAt,
+    before_sleep_at: beforeAt,
+    adapalene: true
+  });
+  baseTime += 24 * 3600000; // next afterSleep is 8h after beforeSleep (16h + 8h = 24h)
+}
+const computedGaps = computePersonalGaps(circadianCycles);
+assert.strictEqual(computedGaps.typicalWakingGapHours, 16.0);
+assert.strictEqual(computedGaps.typicalSleepingGapHours, 8.0);
+assert.strictEqual(computedGaps.wakingSamples, 4);
+assert.strictEqual(computedGaps.sleepingSamples, 3);
+
+// 9c. Risk Ring State: Green (< 70%), Amber (70-99%), Red (>= 100%)
+const testOpenCycle = {
+  id: 'open_risk',
+  after_sleep_at: '2026-09-10T08:00:00Z',
+  before_sleep_at: null,
+  adapalene: null
+};
+const riskCycles = [...circadianCycles, testOpenCycle];
+
+// Green zone: 5h elapsed (5 / 16 = 31.25% < 70%)
+const greenTime = new Date('2026-09-10T13:00:00Z').getTime();
+const ringGreen = computeRiskRingState(riskCycles, computedGaps, 5, 60, greenTime);
+assert.strictEqual(ringGreen.zone, 'green');
+assert.strictEqual(ringGreen.color, '#059669');
+assert.strictEqual(ringGreen.label, 'Buffer Healthy');
+assert.ok(ringGreen.percentRemaining > 60);
+
+// Amber zone: 12h elapsed (12 / 16 = 75% in 70..99%)
+const amberTime = new Date('2026-09-10T20:00:00Z').getTime();
+const ringAmber = computeRiskRingState(riskCycles, computedGaps, 5, 60, amberTime);
+assert.strictEqual(ringAmber.zone, 'amber');
+assert.strictEqual(ringAmber.color, '#D97706');
+assert.strictEqual(ringAmber.label, 'Approaching Window');
+assert.ok(ringAmber.lossFramedCopy.includes('5-cycles streak'));
+
+// Red zone: 17h elapsed (17 / 16 = 106% >= 100%)
+const redTime = new Date('2026-09-11T01:00:00Z').getTime();
+const ringRed = computeRiskRingState(riskCycles, computedGaps, 5, 60, redTime);
+assert.strictEqual(ringRed.zone, 'red');
+assert.strictEqual(ringRed.color, '#B45341');
+assert.strictEqual(ringRed.label, 'Past Typical Window');
+assert.strictEqual(ringRed.percentRemaining, 0);
+assert.ok(ringRed.lossFramedCopy.includes('protect your 5-cycles streak and current progress score (60)'));
+
+// 9d. Grace Eligibility (1 per rolling 30 real days)
+const nowTest = new Date('2026-09-19T10:00:00Z').getTime();
+assert.strictEqual(getGraceEligibility([], nowTest).isEligible, true);
+
+// Grace used 10 days ago -> NOT eligible
+const tenDaysAgo = new Date(nowTest - 10 * 24 * 3600000).toISOString();
+assert.strictEqual(getGraceEligibility([{ timestamp: tenDaysAgo, cycleId: 'c_old' }], nowTest).isEligible, false);
+
+// Grace used 35 days ago -> ELIGIBLE (pruned/expired)
+const thirtyFiveDaysAgo = new Date(nowTest - 35 * 24 * 3600000).toISOString();
+assert.strictEqual(getGraceEligibility([{ timestamp: thirtyFiveDaysAgo, cycleId: 'c_expired' }], nowTest).isEligible, true);
+
+// 9e. Bounded Streak Grace Calculation:
+// Setup: 4 completed cycles, 1 missed cycle, 2 completed cycles
+const streakCycles = [
+  { id: 'sc1', after_sleep_at: 'T1', before_sleep_at: 'T2', adapalene: true },
+  { id: 'sc2', after_sleep_at: 'T3', before_sleep_at: 'T4', adapalene: false },
+  { id: 'sc3', after_sleep_at: 'T5', before_sleep_at: 'T6', adapalene: true },
+  { id: 'sc4', after_sleep_at: 'T7', before_sleep_at: 'T8', adapalene: true },
+  { id: 'sc_miss', after_sleep_at: 'T9', before_sleep_at: null, adapalene: null }, // Missed cycle
+  { id: 'sc5', after_sleep_at: 'T11', before_sleep_at: 'T12', adapalene: true },
+  { id: 'sc6', after_sleep_at: 'T13', before_sleep_at: 'T14', adapalene: false }
+];
+
+// Standard streak without grace breaks at miss -> streak is 2 (sc5 and sc6)
+assert.strictEqual(computeCycleStreak(streakCycles), 2);
+
+// Streak with grace shields sc_miss -> streak is 6 (4 + 2)
+const graceResult = computeCycleStreakWithGrace(streakCycles, [], nowTest);
+assert.strictEqual(graceResult.streak, 6);
+assert.strictEqual(graceResult.graceApplied, true);
+assert.strictEqual(graceResult.shieldedCycleId, 'sc_miss');
+
+// Two misses: 2 completed, 1 miss, 2 completed, 1 miss, 2 completed
+// Only 1 miss can be shielded in a 30-day window
+const twoMissCycles = [
+  { id: 'tm1', after_sleep_at: 'T1', before_sleep_at: 'T2' },
+  { id: 'tm2', after_sleep_at: 'T3', before_sleep_at: 'T4' },
+  { id: 'tm_miss1', after_sleep_at: 'T5', before_sleep_at: null }, // older miss
+  { id: 'tm3', after_sleep_at: 'T7', before_sleep_at: 'T8' },
+  { id: 'tm4', after_sleep_at: 'T9', before_sleep_at: 'T10' },
+  { id: 'tm_miss2', after_sleep_at: 'T11', before_sleep_at: null }, // recent miss
+  { id: 'tm5', after_sleep_at: 'T13', before_sleep_at: 'T14' },
+  { id: 'tm6', after_sleep_at: 'T15', before_sleep_at: 'T16' }
+];
+const twoMissResult = computeCycleStreakWithGrace(twoMissCycles, [], nowTest);
+assert.strictEqual(twoMissResult.streak, 4);
+assert.strictEqual(twoMissResult.graceApplied, true);
+
+// 9f. Strict Progress Score Immunity:
+// Progress Score MUST NEVER be affected by graceLog or shielded status
+assert.strictEqual(typeof computeProgressScore, 'function');
+assert.strictEqual(computeProgressScore.length, 0); // cycles = [] has default value
+const scoreWithoutGrace = computeProgressScore(streakCycles);
+assert.ok(scoreWithoutGrace.score > 0);
+const scoreWithExtraneous = computeProgressScore(streakCycles, [{ timestamp: '2026-09-19', cycleId: 'sc_miss' }]);
+assert.strictEqual(scoreWithExtraneous.score, scoreWithoutGrace.score);
+
+// 9g. Timeline Marker Shielded State
+const shieldedTimeline = buildCycleTimeline(streakCycles, 60, ['sc_miss']);
+const shieldedMarker = shieldedTimeline.find(m => m.id === 'sc_miss');
+assert.strictEqual(shieldedMarker.isShielded, true);
+assert.strictEqual(shieldedMarker.beforeState, 'shielded');
+
+// 9h. Proactive Partner Alert WhatsApp Format
+const alertMsg = formatProactivePartnerAlert('Alex', 'beforeSleep', 17.5, 15);
+assert.ok(alertMsg.includes('Alex'));
+assert.ok(alertMsg.includes('Before Sleep'));
+assert.ok(alertMsg.includes('18h vs typical 15h'));
+assert.ok(alertMsg.includes('Could you check in on them?'));
+
+console.log('✓ Miss-prevention design engine & research mechanisms verified.');
+
+console.log('=== All 9 Test Suites Passed Successfully! ===');
 
 

@@ -693,6 +693,11 @@ header h1 {
 .marker-half.after-missed {
   background: var(--missed-red);
 }
+.marker-half.after-shielded {
+  background: #E2A64B;
+  border: 1.5px solid #B45341;
+  box-shadow: 0 0 6px rgba(226, 166, 75, 0.4);
+}
 .marker-half.after-pending {
   border: 1.5px dashed var(--line-strong);
   background: transparent;
@@ -708,9 +713,193 @@ header h1 {
 .marker-half.before-missed {
   background: var(--missed-red);
 }
+.marker-half.before-shielded {
+  background: #E2A64B;
+  border: 1.5px solid #B45341;
+  box-shadow: 0 0 6px rgba(226, 166, 75, 0.4);
+}
 .marker-half.before-pending {
   border: 1.5px dashed var(--line-strong);
   background: transparent;
+}
+
+/* Implementation Intentions Cue Box */
+.cue-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.cue-box .cue-icon {
+  font-size: 13px;
+}
+
+.cue-box .cue-text {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.cue-box .cue-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--ink-light);
+}
+
+/* --------------------------------------------------------------------------
+   Risk Ring Banner (JITAI Adaptive Reminder & Loss-Framed Visual)
+   -------------------------------------------------------------------------- */
+.risk-ring-banner {
+  background: var(--panel);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.3s ease;
+}
+
+.risk-ring-banner.zone-green {
+  border-left: 5px solid #059669;
+}
+
+.risk-ring-banner.zone-amber {
+  border-left: 5px solid #D97706;
+  background: #FFFCF5;
+}
+
+.risk-ring-banner.zone-red {
+  border-left: 5px solid #B45341;
+  background: #FFF9F8;
+  border-color: rgba(180, 83, 65, 0.3);
+}
+
+.risk-ring-visual {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.risk-ring-svg {
+  transform: rotate(-90deg);
+  width: 58px;
+  height: 58px;
+}
+
+.risk-ring-bg {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 4.5;
+}
+
+.risk-ring-circle {
+  fill: none;
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.16, 1, 0.3, 1), stroke 0.3s ease;
+}
+
+.risk-ring-center-icon {
+  position: absolute;
+  font-size: 14px;
+}
+
+.risk-ring-content {
+  flex: 1;
+}
+
+.risk-ring-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.risk-ring-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.risk-ring-banner.zone-green .risk-ring-title { color: #059669; }
+.risk-ring-banner.zone-amber .risk-ring-title { color: #D97706; }
+.risk-ring-banner.zone-red .risk-ring-title { color: #B45341; }
+
+.risk-ring-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.risk-ring-banner.zone-green .risk-ring-badge { background: #EDF3EE; color: #059669; }
+.risk-ring-banner.zone-amber .risk-ring-badge { background: #FEF3C7; color: #D97706; }
+.risk-ring-banner.zone-red .risk-ring-badge { background: #FDE8E4; color: #B45341; }
+
+.risk-ring-msg {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.risk-ring-meta {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.btn-proactive-whatsapp {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: #25D366;
+  color: #FFF;
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.15s ease;
+}
+
+.btn-proactive-whatsapp:hover {
+  opacity: 0.9;
+}
+
+/* Grace Shield Badge */
+.grace-shield-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: #FEF3C7;
+  color: #B45309;
+  border: 1px solid rgba(217, 119, 6, 0.3);
 }
 
 /* Timeline Detail Card */

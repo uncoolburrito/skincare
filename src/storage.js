@@ -573,7 +573,7 @@ export class StorageController {
   /**
    * Updates tracker settings
    */
-  async updateSettings({ partner_name, partner_phone, nudge_threshold_hours }) {
+  async updateSettings({ partner_name, partner_phone, nudge_threshold_hours, after_sleep_cue, before_sleep_cue }) {
     if (this.role !== 'owner' || !this.tracker) {
       throw new Error('Only the tracker owner can update settings.');
     }
@@ -582,6 +582,8 @@ export class StorageController {
     if (partner_name !== undefined) updates.partner_name = partner_name;
     if (partner_phone !== undefined) updates.partner_phone = partner_phone;
     if (nudge_threshold_hours !== undefined) updates.nudge_threshold_hours = Number(nudge_threshold_hours);
+    if (after_sleep_cue !== undefined) updates.after_sleep_cue = after_sleep_cue;
+    if (before_sleep_cue !== undefined) updates.before_sleep_cue = before_sleep_cue;
 
     const { data, error } = await supabase
       .from('trackers')
@@ -598,6 +600,64 @@ export class StorageController {
     this.tracker = data;
     this.notify();
     return data;
+  }
+
+  /**
+   * Applies streak grace to a missed cycle, appending to trackers.grace_log
+   */
+  async applyStreakGrace(cycleId) {
+    if (this.role !== 'owner' || !this.tracker) {
+      throw new Error('Only the tracker owner can use streak grace.');
+    }
+
+    const now = new Date().toISOString();
+    const currentLog = Array.isArray(this.tracker.grace_log) ? this.tracker.grace_log : [];
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
+    const pruned = currentLog.filter(entry => {
+      const t = new Date(typeof entry === 'string' ? entry : entry.timestamp).getTime();
+      return !isNaN(t) && t >= thirtyDaysAgo;
+    });
+
+    const updatedLog = [...pruned, { timestamp: now, cycleId }];
+
+    const { data, error } = await supabase
+      .from('trackers')
+      .update({ grace_log: updatedLog })
+      .eq('id', this.tracker.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[StorageController] Error applying grace:', error);
+      throw error;
+    }
+
+    this.tracker = data;
+    this.notify();
+    return data;
+  }
+
+  /**
+   * Records that a proactive partner alert was dispatched for this cycle to avoid duplicate WhatsApp pings
+   */
+  async markPartnerAlerted(cycleId) {
+    if (this.role !== 'owner' || !this.tracker) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('trackers')
+        .update({ partner_alerted_cycle_id: cycleId })
+        .eq('id', this.tracker.id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        this.tracker = data;
+        this.notify();
+      }
+    } catch (e) {
+      console.warn('[StorageController] Failed to record partner alert dispatch:', e);
+    }
   }
 
   /**

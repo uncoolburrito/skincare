@@ -409,21 +409,23 @@ export function checkAdaptiveNudge(cycles = [], nudgeThresholdHours = 14) {
 
 /**
  * Builds the 60-cycle timeline strip (oldest to newest):
- * Top = After Sleep (done | missed | pending)
- * Bottom = Before Sleep (adapalene | rest | missed | pending)
+ * Top = After Sleep (done | missed | shielded | pending)
+ * Bottom = Before Sleep (adapalene | rest | missed | shielded | pending)
  */
-export function buildCycleTimeline(cycles = [], maxDisplay = 60) {
+export function buildCycleTimeline(cycles = [], maxDisplay = 60, shieldedIds = []) {
   if (!cycles) return [];
   const openCycle = getOpenCycle(cycles);
+  const shieldedSet = new Set(Array.isArray(shieldedIds) ? shieldedIds : (shieldedIds ? [shieldedIds] : []));
 
   // Take the last maxDisplay cycles
   const slice = cycles.slice(-maxDisplay);
 
   return slice.map((c, index) => {
     const isOpen = openCycle && openCycle.id === c.id;
+    const isShielded = shieldedSet.has(c.id);
 
     // After Sleep state
-    let afterState = 'missed';
+    let afterState = isShielded ? 'shielded' : 'missed';
     if (c.after_sleep_at) {
       afterState = 'done'; // gold
     } else if (isOpen) {
@@ -431,7 +433,7 @@ export function buildCycleTimeline(cycles = [], maxDisplay = 60) {
     }
 
     // Before Sleep state
-    let beforeState = 'missed';
+    let beforeState = isShielded ? 'shielded' : 'missed';
     if (c.before_sleep_at) {
       beforeState = c.adapalene === true ? 'adapalene' : 'rest';
     } else if (isOpen) {
@@ -442,6 +444,7 @@ export function buildCycleTimeline(cycles = [], maxDisplay = 60) {
       cycleIndex: cycles.indexOf(c) + 1,
       id: c.id,
       isOpen,
+      isShielded,
       afterState,
       beforeState,
       afterSleepAt: c.after_sleep_at,
@@ -704,4 +707,252 @@ export function computeProgressScore(cycles = []) {
     tauGain: TAU_GAIN,
     tauDecay: TAU_DECAY
   };
+}
+
+// =============================================================================
+// 9. Miss-Prevention Design Engine
+// =============================================================================
+
+/**
+ * JITAI: Computes rolling personal average gaps from trailing cycles (14-20 samples).
+ * Replaces flat threshold with individual circadian behavior.
+ */
+export function computePersonalGaps(cycles = []) {
+  const DEFAULT_WAKING = 15.0;  // hours between After Sleep and Before Sleep
+  const DEFAULT_SLEEPING = 9.0; // hours between Before Sleep and next After Sleep
+
+  if (!cycles || cycles.length === 0) {
+    return {
+      typicalWakingGapHours: DEFAULT_WAKING,
+      typicalSleepingGapHours: DEFAULT_SLEEPING,
+      wakingSamples: 0,
+      sleepingSamples: 0
+    };
+  }
+
+  const recent = cycles.slice(-20);
+  const wakingGaps = [];
+  const sleepingGaps = [];
+
+  for (let i = 0; i < recent.length; i++) {
+    const c = recent[i];
+    // Waking gap: within the same cycle, from after_sleep_at to before_sleep_at
+    if (c.after_sleep_at && c.before_sleep_at) {
+      const tAfter = new Date(c.after_sleep_at).getTime();
+      const tBefore = new Date(c.before_sleep_at).getTime();
+      if (!isNaN(tAfter) && !isNaN(tBefore) && tBefore > tAfter) {
+        const gapH = (tBefore - tAfter) / 3600000;
+        if (gapH >= 6 && gapH <= 26) {
+          wakingGaps.push(gapH);
+        }
+      }
+    }
+
+    // Sleeping gap: from previous cycle's before_sleep_at to this cycle's after_sleep_at
+    if (i > 0) {
+      const prev = recent[i - 1];
+      if (prev.before_sleep_at && c.after_sleep_at) {
+        const tPrevBefore = new Date(prev.before_sleep_at).getTime();
+        const tCurrAfter = new Date(c.after_sleep_at).getTime();
+        if (!isNaN(tPrevBefore) && !isNaN(tCurrAfter) && tCurrAfter > tPrevBefore) {
+          const gapH = (tCurrAfter - tPrevBefore) / 3600000;
+          if (gapH >= 4 && gapH <= 18) {
+            sleepingGaps.push(gapH);
+          }
+        }
+      }
+    }
+  }
+
+  const avgWaking = wakingGaps.length >= 3
+    ? wakingGaps.reduce((sum, g) => sum + g, 0) / wakingGaps.length
+    : DEFAULT_WAKING;
+
+  const avgSleeping = sleepingGaps.length >= 3
+    ? sleepingGaps.reduce((sum, g) => sum + g, 0) / sleepingGaps.length
+    : DEFAULT_SLEEPING;
+
+  return {
+    typicalWakingGapHours: Math.round(avgWaking * 10) / 10,
+    typicalSleepingGapHours: Math.round(avgSleeping * 10) / 10,
+    wakingSamples: wakingGaps.length,
+    sleepingSamples: sleepingGaps.length
+  };
+}
+
+/**
+ * Computes Risk Ring State (battery/fitness ring language):
+ * - Green: < 70% of personal typical gap
+ * - Amber: 70% - 99% of personal typical gap (heads-up)
+ * - Red: >= 100% of personal typical gap (firmer reminder, loss-framed)
+ */
+export function computeRiskRingState(cycles = [], personalGaps = null, streak = 0, progressScore = 0, nowMs = Date.now()) {
+  const gaps = personalGaps || computePersonalGaps(cycles);
+  const openCycle = getOpenCycle(cycles);
+
+  let pendingType = null;
+  let elapsedHours = 0;
+  let typicalHours = 15;
+
+  if (openCycle && openCycle.after_sleep_at && !openCycle.before_sleep_at) {
+    // Waiting for Before Sleep
+    pendingType = 'beforeSleep';
+    const startMs = new Date(openCycle.after_sleep_at).getTime();
+    if (!isNaN(startMs)) {
+      elapsedHours = Math.max(0, (nowMs - startMs) / 3600000);
+    }
+    typicalHours = gaps.typicalWakingGapHours;
+  } else {
+    // Waiting for After Sleep from last resolved before_sleep
+    pendingType = 'afterSleep';
+    let lastBeforeSleepAt = null;
+    for (let i = cycles.length - 1; i >= 0; i--) {
+      if (cycles[i].before_sleep_at) {
+        lastBeforeSleepAt = cycles[i].before_sleep_at;
+        break;
+      }
+    }
+    if (lastBeforeSleepAt) {
+      const startMs = new Date(lastBeforeSleepAt).getTime();
+      if (!isNaN(startMs)) {
+        elapsedHours = Math.max(0, (nowMs - startMs) / 3600000);
+      }
+    }
+    typicalHours = gaps.typicalSleepingGapHours;
+  }
+
+  const ratio = typicalHours > 0 ? elapsedHours / typicalHours : 0;
+  const percentRemaining = Math.max(0, Math.min(100, Math.round((1 - Math.min(1, ratio)) * 100)));
+
+  let zone = 'green';
+  let color = '#059669'; // sage/green
+  let label = 'Buffer Healthy';
+  let lossFramedCopy = '';
+
+  const streakNoun = streak === 1 ? 'cycle streak' : 'cycles streak';
+  const roundedProgress = Math.round(progressScore);
+  const pendingTitle = pendingType === 'beforeSleep' ? 'Before Sleep' : 'After Sleep';
+
+  if (ratio >= 1.0) {
+    zone = 'red';
+    color = '#B45341'; // brick red
+    label = 'Past Typical Window';
+    lossFramedCopy = streak > 0
+      ? `Past your typical ${Math.round(typicalHours)}h window. Complete ${pendingTitle} to protect your ${streak}-${streakNoun} and current progress score (${roundedProgress}).`
+      : `Past your typical ${Math.round(typicalHours)}h window. Complete ${pendingTitle} to keep your progress score (${roundedProgress}) on track.`;
+  } else if (ratio >= 0.70) {
+    zone = 'amber';
+    color = '#D97706'; // warm amber
+    label = 'Approaching Window';
+    lossFramedCopy = streak > 0
+      ? `Your ${streak}-${streakNoun} is in the safe buffer window. Complete ${pendingTitle} soon to keep it secure.`
+      : `Progress score is at ${roundedProgress}. Complete ${pendingTitle} to maintain momentum.`;
+  } else {
+    zone = 'green';
+    color = '#059669';
+    label = 'Buffer Healthy';
+    lossFramedCopy = streak > 0
+      ? `Your ${streak}-${streakNoun} is on track (${Math.round(elapsedHours)}h elapsed of typical ${Math.round(typicalHours)}h).`
+      : `Routine buffer is healthy (${Math.round(elapsedHours)}h elapsed of typical ${Math.round(typicalHours)}h).`;
+  }
+
+  return {
+    zone,
+    ratio,
+    percentRemaining,
+    elapsedHours: Math.round(elapsedHours * 10) / 10,
+    typicalHours,
+    color,
+    label,
+    pendingType,
+    pendingTitle,
+    lossFramedCopy
+  };
+}
+
+/**
+ * Checks if streak grace is currently eligible (1 per 30 rolling real days).
+ */
+export function getGraceEligibility(graceLog = [], nowMs = Date.now()) {
+  const thirtyDaysMs = 30 * 24 * 3600 * 1000;
+  const recentUses = (Array.isArray(graceLog) ? graceLog : []).filter(entry => {
+    const t = new Date(typeof entry === 'string' ? entry : entry.timestamp).getTime();
+    return !isNaN(t) && (nowMs - t) < thirtyDaysMs;
+  });
+
+  const isEligible = recentUses.length === 0;
+  const lastUse = recentUses.length > 0 ? recentUses[recentUses.length - 1] : null;
+
+  return {
+    isEligible,
+    recentUses,
+    lastUseTimestamp: lastUse ? (typeof lastUse === 'string' ? lastUse : lastUse.timestamp) : null
+  };
+}
+
+/**
+ * Bounded Streak Grace Calculation:
+ * Shields the motivational streak counter from resetting to 0 on 1 accidental miss
+ * per rolling 30 real days. Progress Score strictly ignores grace.
+ */
+export function computeCycleStreakWithGrace(cycles = [], graceLog = [], nowMs = Date.now()) {
+  if (!cycles || cycles.length === 0) {
+    return { streak: 0, graceApplied: false, shieldedCycleId: null };
+  }
+
+  let startIndex = cycles.length - 1;
+  const last = cycles[startIndex];
+  if (!isCycleComplete(last)) {
+    startIndex = cycles.length - 2;
+  }
+
+  if (startIndex < 0) {
+    return { streak: 0, graceApplied: false, shieldedCycleId: null };
+  }
+
+  const thirtyDaysMs = 30 * 24 * 3600 * 1000;
+  const validGraceEntries = (Array.isArray(graceLog) ? graceLog : []).filter(e => {
+    const t = new Date(typeof e === 'string' ? e : e.timestamp).getTime();
+    return !isNaN(t) && (nowMs - t) < thirtyDaysMs;
+  });
+
+  let streak = 0;
+  let graceUsedInStreak = false;
+  let shieldedCycleId = null;
+
+  for (let i = startIndex; i >= 0; i--) {
+    const c = cycles[i];
+    if (isCycleComplete(c)) {
+      streak++;
+    } else {
+      // Incomplete or missed cycle
+      if (!graceUsedInStreak) {
+        // Check if this cycle is shielded
+        const matchedGrace = validGraceEntries.find(e => (typeof e === 'object' && e.cycleId === c.id));
+        const canShield = matchedGrace || validGraceEntries.length === 0;
+
+        if (canShield) {
+          graceUsedInStreak = true;
+          shieldedCycleId = c.id;
+          // Grace shields streak: streak continues
+          continue;
+        }
+      }
+      break;
+    }
+  }
+
+  return {
+    streak,
+    graceApplied: graceUsedInStreak,
+    shieldedCycleId
+  };
+}
+
+/**
+ * Formats Proactive Partner Alert WhatsApp message when entering red zone.
+ */
+export function formatProactivePartnerAlert(ownerName = 'The tracker owner', pendingType = 'beforeSleep', elapsedHours = 16, typicalHours = 15) {
+  const routine = pendingType === 'beforeSleep' ? 'Before Sleep' : 'After Sleep';
+  return `Hey! Quick nudge for ${ownerName}: they haven't logged ${routine} skincare yet and it's later than usual for them (${Math.round(elapsedHours)}h vs typical ${Math.round(typicalHours)}h). Could you check in on them?`;
 }

@@ -22,8 +22,19 @@ create table if not exists public.trackers (
   partner_phone text,              -- Owner-only readable (never exposed to Partner)
   nudge_threshold_hours int default 14,
   last_nudged_cycle_id uuid,
+  after_sleep_cue text default 'right when I wake up',
+  before_sleep_cue text default 'right before I get into bed',
+  grace_log jsonb default '[]'::jsonb,
+  partner_alerted_cycle_id uuid,
   created_at timestamptz default now()
 );
+
+-- Ensure miss-prevention columns exist on existing deployments:
+alter table public.trackers
+  add column if not exists after_sleep_cue text default 'right when I wake up',
+  add column if not exists before_sleep_cue text default 'right before I get into bed',
+  add column if not exists grace_log jsonb default '[]'::jsonb,
+  add column if not exists partner_alerted_cycle_id uuid;
 
 -- Cycles table (sleep-cycle events: After Sleep and Before Sleep)
 create table if not exists public.cycles (
@@ -111,6 +122,10 @@ select
   end as partner_phone,
   t.nudge_threshold_hours,
   t.last_nudged_cycle_id,
+  t.after_sleep_cue,
+  t.before_sleep_cue,
+  t.grace_log,
+  t.partner_alerted_cycle_id,
   t.created_at,
   case
     when t.owner_id = auth.uid() then 'owner'

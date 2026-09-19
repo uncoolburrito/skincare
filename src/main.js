@@ -35,7 +35,12 @@ import {
   getAfterSleepGuide,
   computeProgressScore,
   getProgressMilestone,
-  renderProgressMotif
+  renderProgressMotif,
+  computePersonalGaps,
+  computeRiskRingState,
+  getGraceEligibility,
+  computeCycleStreakWithGrace,
+  formatProactivePartnerAlert
 } from './cycles.js';
 
 // Application State
@@ -288,16 +293,22 @@ async function handleSaveSettings(e) {
   const nameInput = document.getElementById('inPartnerName');
   const phoneInput = document.getElementById('inPartnerPhone');
   const nudgeInput = document.getElementById('inNudgeThreshold');
+  const afterCueInput = document.getElementById('inAfterSleepCue');
+  const beforeCueInput = document.getElementById('inBeforeSleepCue');
 
   const partner_name = nameInput ? nameInput.value.trim() : '';
   const partner_phone = phoneInput ? phoneInput.value.trim() : '';
   const nudge_threshold_hours = nudgeInput ? Number(nudgeInput.value) || 14 : 14;
+  const after_sleep_cue = afterCueInput ? afterCueInput.value.trim() : '';
+  const before_sleep_cue = beforeCueInput ? beforeCueInput.value.trim() : '';
 
   try {
     await state.storage.updateSettings({
       partner_name,
       partner_phone,
-      nudge_threshold_hours
+      nudge_threshold_hours,
+      after_sleep_cue,
+      before_sleep_cue
     });
     showToast('Settings saved successfully!');
     state.settingsOpen = false;
@@ -578,15 +589,21 @@ function renderDashboard(storageState) {
   const tracker = storageState.tracker;
   const cycles = storageState.cycles || [];
 
-  // Metrics
-  const streak = computeCycleStreak(cycles);
+  // Metrics & JITAI Circadian Gaps
+  const graceLog = tracker?.grace_log || [];
+  const streakData = computeCycleStreakWithGrace(cycles, graceLog);
+  const streak = streakData.streak;
+  const graceApplied = streakData.graceApplied;
+  const shieldedCycleId = streakData.shieldedCycleId;
+
   const longest = computeLongestCycleStreak(cycles);
   const missed = computeMissedCycles(cycles);
   const adapalenePhase = computeAdapalenePhase(cycles);
   const tonightPlan = computeTonightPlan(cycles);
   const progress = computeProgressScore(cycles);
   const openCycle = getOpenCycle(cycles);
-  const nudge = checkAdaptiveNudge(cycles, tracker?.nudge_threshold_hours || 14);
+  const personalGaps = computePersonalGaps(cycles);
+  const riskRing = computeRiskRingState(cycles, personalGaps, streak, progress.score);
 
   // Status of open cycle
   const afterLogged = !!(openCycle && openCycle.after_sleep_at);
@@ -610,8 +627,8 @@ function renderDashboard(storageState) {
 
   const afterSleepGuide = getAfterSleepGuide();
 
-  // Timeline
-  const timelineMarkers = buildCycleTimeline(cycles, 60);
+  // Timeline (with grace-shielded cycle IDs)
+  const timelineMarkers = buildCycleTimeline(cycles, 60, shieldedCycleId);
   const selectedCycle = state.selectedCycleId
     ? timelineMarkers.find(m => m.id === state.selectedCycleId)
     : null;
@@ -653,22 +670,56 @@ function renderDashboard(storageState) {
       </div>
     ` : ''}
 
-    <!-- Adaptive Nudge Banner (Feature 7) -->
-    ${(isOwner && nudge) ? `
-      <div class="nudge-banner">
-        <div class="nudge-icon">⏰</div>
-        <div class="nudge-content">
-          <div class="nudge-title">${escapeHtml(nudge.pendingLabel)} Pending</div>
-          <div class="nudge-msg">${escapeHtml(nudge.message)}</div>
+    <!-- Risk Ring Banner (JITAI Adaptive Reminder & Loss-Framed Visual) -->
+    <div class="risk-ring-banner zone-${riskRing.zone}">
+      <div class="risk-ring-visual">
+        <svg class="risk-ring-svg" viewBox="0 0 58 58">
+          <circle class="risk-ring-bg" cx="29" cy="29" r="24" />
+          <circle
+            class="risk-ring-circle"
+            cx="29"
+            cy="29"
+            r="24"
+            stroke="${riskRing.color}"
+            stroke-dasharray="150.8"
+            stroke-dashoffset="${150.8 * (1 - riskRing.percentRemaining / 100)}"
+          />
+        </svg>
+        <div class="risk-ring-center-icon">
+          ${riskRing.zone === 'red' ? '⚠️' : (riskRing.zone === 'amber' ? '⏱️' : '⚡')}
         </div>
       </div>
-    ` : ''}
+      <div class="risk-ring-content">
+        <div class="risk-ring-header">
+          <span class="risk-ring-title">${escapeHtml(riskRing.pendingTitle)} Buffer</span>
+          <span class="risk-ring-badge">${escapeHtml(riskRing.label)}</span>
+        </div>
+        <div class="risk-ring-msg">${escapeHtml(riskRing.lossFramedCopy)}</div>
+        <div class="risk-ring-meta">
+          ${riskRing.elapsedHours}h elapsed &bull; Typical rhythm: ~${Math.round(riskRing.typicalHours)}h &bull; ${riskRing.percentRemaining}% buffer
+        </div>
+        ${(isOwner && riskRing.zone === 'red' && tracker?.partner_phone) ? `
+          ${tracker?.partner_alerted_cycle_id === openCycle?.id ? `
+            <div style="font-size: 11px; color: var(--ink-soft); margin-top: 6px;">
+              ✓ WhatsApp check-in sent to ${escapeHtml(tracker.partner_name || 'Partner')}
+            </div>
+          ` : `
+            <button class="btn-proactive-whatsapp" id="btnProactiveAlert">
+              📱 Ask ${escapeHtml(tracker.partner_name || 'Partner')} to check in
+            </button>
+          `}
+        ` : ''}
+      </div>
+    </div>
 
     <!-- Streak Hero Card (Feature 3) -->
     <div class="hero-card">
       <div class="streak-display">
         <div class="streak-number">${streak}</div>
-        <div class="streak-unit">${streak === 1 ? 'Cycle Streak' : 'Cycles Streak'}</div>
+        <div class="streak-unit">
+          ${streak === 1 ? 'Cycle Streak' : 'Cycles Streak'}
+          ${graceApplied ? '<span class="grace-shield-pill" title="Protected by 30-day streak grace">🛡️ Grace Shield</span>' : ''}
+        </div>
       </div>
       <div class="stats-grid">
         <div class="stat-item">
@@ -752,6 +803,15 @@ function renderDashboard(storageState) {
             </div>
           ` : ''}
 
+          <!-- Situational Habit Cue (Gollwitzer 1999) -->
+          <div class="cue-box">
+            <span class="cue-icon">💡</span>
+            <div>
+              <span class="cue-label">Your Cue:</span>
+              <span class="cue-text">"${escapeHtml(tracker?.after_sleep_cue || 'right when I wake up')}"</span>
+            </div>
+          </div>
+
           <!-- After Sleep Routine Guide -->
           <div class="guide-box">
             <div class="guide-steps">
@@ -790,6 +850,15 @@ function renderDashboard(storageState) {
               Mistake? <button class="btn-uncheck" id="btnUncheckBefore">Un-check slot</button>
             </div>
           ` : ''}
+
+          <!-- Situational Habit Cue (Gollwitzer 1999) -->
+          <div class="cue-box">
+            <span class="cue-icon">💡</span>
+            <div>
+              <span class="cue-label">Your Cue:</span>
+              <span class="cue-text">"${escapeHtml(tracker?.before_sleep_cue || 'right before I get into bed')}"</span>
+            </div>
+          </div>
 
           <!-- Live Adaptive Adapalene Guide / Logged Routine Summary (Fix 2) -->
           <div class="guide-box">
@@ -909,12 +978,13 @@ function renderDashboard(storageState) {
         <div class="timeline-details-card">
           <div class="timeline-details-title">
             Cycle #${selectedCycle.cycleIndex} ${selectedCycle.isOpen ? '(Current Open Cycle)' : ''}
+            ${selectedCycle.isShielded ? '<span class="grace-shield-pill" style="margin-left: 6px;">🛡️ Shielded</span>' : ''}
           </div>
           <div class="timeline-details-grid">
             <div class="timeline-details-item">
               <span class="lbl">After Sleep</span>
               <span class="val">
-                ${selectedCycle.afterSleepAt ? formatDateTime(selectedCycle.afterSleepAt) : (selectedCycle.isOpen ? 'Pending' : 'Missed')}
+                ${selectedCycle.afterSleepAt ? formatDateTime(selectedCycle.afterSleepAt) : (selectedCycle.isOpen ? 'Pending' : (selectedCycle.isShielded ? 'Missed (Grace Shielded)' : 'Missed'))}
               </span>
             </div>
             <div class="timeline-details-item">
@@ -922,11 +992,16 @@ function renderDashboard(storageState) {
               <span class="val">
                 ${selectedCycle.beforeSleepAt
                   ? `${formatDateTime(selectedCycle.beforeSleepAt)} (${selectedCycle.adapalene ? 'Adapalene' : 'Rest'})`
-                  : (selectedCycle.isOpen ? 'Pending' : 'Missed')
+                  : (selectedCycle.isOpen ? 'Pending' : (selectedCycle.isShielded ? 'Missed (Grace Shielded)' : 'Missed'))
                 }
               </span>
             </div>
           </div>
+          ${selectedCycle.isShielded ? `
+            <div style="margin-top: 8px; font-size: 11px; color: #B45309; background: #FEF3C7; padding: 4px 8px; border-radius: 4px; font-weight: 500;">
+              🛡️ Protected by 30-day streak grace. Motivational streak maintained; progress score decayed biologically.
+            </div>
+          ` : ''}
         </div>
       ` : ''}
 
@@ -946,6 +1021,10 @@ function renderDashboard(storageState) {
         <div class="legend-item">
           <div class="legend-dot brick"></div>
           <span>Missed</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: #E2A64B; border: 1px solid #B45341;"></div>
+          <span>Grace Shielded</span>
         </div>
       </div>
     </div>
@@ -1010,6 +1089,41 @@ function renderSettingsModal(tracker, storageState) {
             <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
               Shows an in-app banner when one half of a cycle has been open for longer than this.
             </span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inAfterSleepCue">After Sleep Situational Cue</label>
+            <input
+              type="text"
+              id="inAfterSleepCue"
+              class="form-input"
+              placeholder="e.g. right when my alarm rings"
+              value="${escapeHtml(tracker?.after_sleep_cue || 'right when I wake up')}"
+            />
+            <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right when my alarm rings" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">alarm rings</button>
+              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="right after my morning shower" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">morning shower</button>
+              <button type="button" class="btn-cue-preset" data-target="inAfterSleepCue" data-val="while morning coffee brews" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">coffee brews</button>
+            </div>
+            <span style="font-size: 11px; color: var(--ink-soft); display: block; margin-top: 4px;">
+              Anchoring your routine to an existing situational cue increases follow-through 2–3x (Gollwitzer 1999).
+            </span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="inBeforeSleepCue">Before Sleep Situational Cue</label>
+            <input
+              type="text"
+              id="inBeforeSleepCue"
+              class="form-input"
+              placeholder="e.g. right before I get into bed"
+              value="${escapeHtml(tracker?.before_sleep_cue || 'right before I get into bed')}"
+            />
+            <div class="cue-presets" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after brushing my teeth" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">brushing teeth</button>
+              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right before plugging phone into charger" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">charging phone</button>
+              <button type="button" class="btn-cue-preset" data-target="inBeforeSleepCue" data-val="right after changing into nightwear" style="font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; color: var(--ink-soft);">nightwear</button>
+            </div>
           </div>
 
           <button type="submit" class="btn-primary" style="margin-top: 8px;">
@@ -1134,6 +1248,26 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
     openWhatsApp(tracker?.partner_phone, msg);
   });
 
+  // Proactive WhatsApp check-in trigger (Miss-Prevention Feature 4)
+  document.getElementById('btnProactiveAlert')?.addEventListener('click', async () => {
+    const gaps = computePersonalGaps(cycles);
+    const streakData = computeCycleStreakWithGrace(cycles, tracker?.grace_log || []);
+    const prog = computeProgressScore(cycles);
+    const risk = computeRiskRingState(cycles, gaps, streakData.streak, prog.score);
+    const openC = getOpenCycle(cycles);
+
+    const alertMsg = formatProactivePartnerAlert(
+      'your friend',
+      risk.pendingType,
+      risk.elapsedHours,
+      risk.typicalHours
+    );
+    openWhatsApp(tracker?.partner_phone, alertMsg);
+    if (openC?.id) {
+      await state.storage.markPartnerAlerted(openC.id);
+    }
+  });
+
   // Settings Modal Listeners
   if (state.settingsOpen) {
     document.getElementById('btnCloseSettings')?.addEventListener('click', () => {
@@ -1141,6 +1275,19 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
       state.confirmResetOpen = false;
       state.confirmRevokeOpen = false;
       render();
+    });
+
+    // Situational Cue preset pills
+    document.querySelectorAll('.btn-cue-preset').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const targetId = btn.getAttribute('data-target');
+        const val = btn.getAttribute('data-val');
+        const input = document.getElementById(targetId);
+        if (input && val) {
+          input.value = val;
+        }
+      });
     });
 
     document.getElementById('settingsForm')?.addEventListener('submit', handleSaveSettings);
