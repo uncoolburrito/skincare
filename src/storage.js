@@ -219,9 +219,12 @@ export class StorageController {
         const dates = Object.keys(entries).sort();
         const toInsert = [];
 
+        const existingAfter = new Set(this.cycles.map(c => c.after_sleep_at).filter(Boolean));
+        const existingBefore = new Set(this.cycles.map(c => c.before_sleep_at).filter(Boolean));
+
         for (const dStr of dates) {
           const e = entries[dStr];
-          if (e.amAt && !e.pmAt) {
+          if (e.amAt && !e.pmAt && !existingAfter.has(e.amAt)) {
             toInsert.push({
               tracker_id: this.tracker.id,
               after_sleep_at: e.amAt,
@@ -229,7 +232,7 @@ export class StorageController {
               adapalene: null,
               created_at: e.amAt
             });
-          } else if (!e.amAt && e.pmAt) {
+          } else if (!e.amAt && e.pmAt && !existingBefore.has(e.pmAt)) {
             toInsert.push({
               tracker_id: this.tracker.id,
               after_sleep_at: null,
@@ -237,7 +240,7 @@ export class StorageController {
               adapalene: true,
               created_at: e.pmAt
             });
-          } else if (e.amAt && e.pmAt) {
+          } else if (e.amAt && e.pmAt && (!existingAfter.has(e.amAt) || !existingBefore.has(e.pmAt))) {
             toInsert.push({
               tracker_id: this.tracker.id,
               after_sleep_at: e.amAt,
