@@ -110,8 +110,8 @@ create policy "Trackers owner delete"
 -- Both Owner and Partner query this view.
 -- For the Owner: partner_phone is returned.
 -- For the Partner: partner_phone is strictly NULL at the database level!
--- ------------------------------------------------------------------------------
-create or replace view public.trackers_view with (security_invoker = false) as
+drop view if exists public.trackers_view;
+create view public.trackers_view with (security_invoker = false) as
 select
   t.id,
   t.owner_id,
