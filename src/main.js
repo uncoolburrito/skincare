@@ -281,7 +281,7 @@ async function handleCheckInTap(type) {
   const storageState = state.storage.getState();
   const tracker = storageState.tracker;
   const cycles = storageState.cycles;
-  const tonightPlan = computeTonightPlan(cycles);
+  const tonightPlan = computeTonightPlan(cycles, tracker);
 
   try {
     // 1. Record and save to Supabase
@@ -291,7 +291,7 @@ async function handleCheckInTap(type) {
     // 2. Open WhatsApp to Partner with pre-filled message (one tap does both)
     const newCycles = state.storage.getState().cycles;
     const streak = computeCycleStreak(newCycles);
-    const message = formatWhatsAppMessage(type, savedCycle, streak, tonightPlan);
+    const message = formatWhatsAppMessage(type, savedCycle, streak, tonightPlan, tracker);
 
     const partnerPhone = tracker?.partner_phone;
     if (partnerPhone) {
@@ -626,9 +626,9 @@ function renderDashboard(storageState) {
 
   const longest = computeLongestCycleStreak(cycles);
   const missed = computeMissedCycles(cycles);
-  const adapalenePhase = computeAdapalenePhase(cycles);
-  const tonightPlan = computeTonightPlan(cycles);
-  const progress = computeProgressScore(cycles);
+  const adapalenePhase = computeAdapalenePhase(cycles, tracker);
+  const tonightPlan = computeTonightPlan(cycles, tracker);
+  const progress = computeProgressScore(cycles, tracker);
   const openCycle = getOpenCycle(cycles);
   const personalGaps = computePersonalGaps(cycles);
   const riskRing = computeRiskRingState(cycles, personalGaps, streak, progress.score);
@@ -650,11 +650,11 @@ function renderDashboard(storageState) {
       }
       return c;
     });
-    priorPlan = computeTonightPlan(priorCycles);
+    priorPlan = computeTonightPlan(priorCycles, tracker);
     followedRecommendation = (openCycle.adapalene === priorPlan.useAdapalene);
   }
 
-  const afterSleepGuide = getAfterSleepGuide();
+  const afterSleepGuide = getAfterSleepGuide(tracker);
 
   // Timeline (with grace-shielded cycle IDs)
   const timelineMarkers = buildCycleTimeline(cycles, 60, shieldedCycleId);
@@ -865,9 +865,9 @@ function renderDashboard(storageState) {
           <!-- After Sleep Routine Guide -->
           <div class="guide-box">
             <div class="guide-steps">
-              Wash <b>&rarr;</b> Azelaic acid 10% <b>&rarr;</b> Moisturizer <b>&rarr;</b> Sunscreen
+              ${escapeHtml(afterSleepGuide.instructions).replace(/→/g, '<b>&rarr;</b>')}
             </div>
-            <div class="guide-subtext">Consistent daily barrier defense & post-inflammatory care.</div>
+            <div class="guide-subtext">${escapeHtml(afterSleepGuide.subtext)}</div>
           </div>
         </div>
 
@@ -879,7 +879,7 @@ function renderDashboard(storageState) {
               <h2 class="checkin-title">Before Sleep</h2>
               <div class="checkin-status ${beforeLogged ? 'logged' : ''}">
                 ${beforeLogged
-                  ? `✓ Logged at ${formatTime(openCycle.before_sleep_at)} (${openCycle.adapalene ? 'Adapalene' : 'Rest'})`
+                  ? `✓ Logged at ${formatTime(openCycle.before_sleep_at)}${tracker?.has_titration_schedule !== false ? ` (${openCycle.adapalene ? (tracker?.routine_config?.beforeSleep?.titration?.productShort || 'Adapalene') : 'Rest'})` : ''}`
                   : 'Pending check-in'
                 }
               </div>
@@ -914,33 +914,47 @@ function renderDashboard(storageState) {
           <div class="guide-box">
             ${beforeLogged ? `
               <div class="guide-badge-row">
-                <span class="badge-pill ${openCycle.adapalene ? 'adapalene' : 'rest'}">
-                  ✓ ${openCycle.adapalene ? 'Adapalene Applied' : 'Intentional Rest'}
-                </span>
-                <span class="badge-pill phase">
-                  ${escapeHtml(adapalenePhase.label)}
-                </span>
+                ${tracker?.has_titration_schedule !== false ? `
+                  <span class="badge-pill ${openCycle.adapalene ? 'adapalene' : 'rest'}">
+                    ✓ ${openCycle.adapalene ? `${tracker?.routine_config?.beforeSleep?.titration?.productShort || 'Adapalene'} Applied` : 'Intentional Rest'}
+                  </span>
+                  ${adapalenePhase ? `
+                    <span class="badge-pill phase">
+                      ${escapeHtml(adapalenePhase.label)}
+                    </span>
+                  ` : ''}
+                ` : `
+                  <span class="badge-pill adapalene">✓ Routine Complete</span>
+                `}
               </div>
               <div class="guide-steps">
-                ${openCycle.adapalene
-                  ? 'Wash <b>&rarr;</b> Adapalene 0.1% <b>&rarr;</b> Moisturizer'
-                  : 'Wash <b>&rarr;</b> Moisturizer only'
-                }
+                ${escapeHtml(
+                  tracker?.has_titration_schedule !== false
+                    ? (openCycle.adapalene
+                        ? (tracker?.routine_config?.beforeSleep?.titration?.activeSteps || 'Wash → Adapalene 0.1% → Moisturizer')
+                        : (tracker?.routine_config?.beforeSleep?.titration?.restSteps || 'Wash → Moisturizer only'))
+                    : (tonightPlan.instructions)
+                ).replace(/→/g, '<b>&rarr;</b>')}
               </div>
               <div class="guide-subtext">
-                ${!followedRecommendation
-                  ? `Recorded at ${formatTime(openCycle.before_sleep_at)} (${openCycle.adapalene ? 'Adapalene applied' : 'Rest taken'} — app had suggested ${escapeHtml(priorPlan.badge)}). Next session: ${escapeHtml(nextPlan.badge)}.`
-                  : `Completed at ${formatTime(openCycle.before_sleep_at)} as scheduled. Next session will be: ${escapeHtml(nextPlan.badge)}.`
+                ${tracker?.has_titration_schedule !== false
+                  ? (!followedRecommendation
+                      ? `Recorded at ${formatTime(openCycle.before_sleep_at)} (${openCycle.adapalene ? `${tracker?.routine_config?.beforeSleep?.titration?.productShort || 'Adapalene'} applied` : 'Rest taken'} — app had suggested ${escapeHtml(priorPlan.badge)}). Next session: ${escapeHtml(nextPlan.badge)}.`
+                      : `Completed at ${formatTime(openCycle.before_sleep_at)} as scheduled. Next session will be: ${escapeHtml(nextPlan.badge)}.`
+                    )
+                  : `Completed at ${formatTime(openCycle.before_sleep_at)} as scheduled.`
                 }
               </div>
             ` : `
               <div class="guide-badge-row">
-                <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : 'rest'}">
+                <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : (tracker?.has_titration_schedule === false ? 'adapalene' : 'rest')}">
                   ${escapeHtml(tonightPlan.badge)}
                 </span>
-                <span class="badge-pill phase">
-                  ${escapeHtml(adapalenePhase.label)}
-                </span>
+                ${adapalenePhase ? `
+                  <span class="badge-pill phase">
+                    ${escapeHtml(adapalenePhase.label)}
+                  </span>
+                ` : ''}
               </div>
               <div class="guide-steps">
                 ${escapeHtml(tonightPlan.instructions).replace(/→/g, '<b>&rarr;</b>')}
@@ -962,30 +976,41 @@ function renderDashboard(storageState) {
       <div class="checkin-card before-sleep" style="margin-bottom: 24px;">
         ${beforeLogged ? `
           <div class="guide-badge-row">
-            <span class="badge-pill ${openCycle.adapalene ? 'adapalene' : 'rest'}">
-              Tonight: ${openCycle.adapalene ? 'Adapalene Applied' : 'Intentional Rest'}
-            </span>
-            <span class="badge-pill phase">
-              ${escapeHtml(adapalenePhase.name)} (${adapalenePhase.count} nights)
-            </span>
+            ${tracker?.has_titration_schedule !== false ? `
+              <span class="badge-pill ${openCycle.adapalene ? 'adapalene' : 'rest'}">
+                Tonight: ${openCycle.adapalene ? `${tracker?.routine_config?.beforeSleep?.titration?.productShort || 'Adapalene'} Applied` : 'Intentional Rest'}
+              </span>
+              ${adapalenePhase ? `
+                <span class="badge-pill phase">
+                  ${escapeHtml(adapalenePhase.name)} (${adapalenePhase.count} nights)
+                </span>
+              ` : ''}
+            ` : `
+              <span class="badge-pill adapalene">Tonight: Done</span>
+            `}
           </div>
           <div class="guide-steps" style="margin-top: 8px;">
-            ${openCycle.adapalene
-              ? 'Wash <b>&rarr;</b> Adapalene 0.1% <b>&rarr;</b> Moisturizer'
-              : 'Wash <b>&rarr;</b> Moisturizer only'
-            }
+            ${escapeHtml(
+              tracker?.has_titration_schedule !== false
+                ? (openCycle.adapalene
+                    ? (tracker?.routine_config?.beforeSleep?.titration?.activeSteps || 'Wash → Adapalene 0.1% → Moisturizer')
+                    : (tracker?.routine_config?.beforeSleep?.titration?.restSteps || 'Wash → Moisturizer only'))
+                : (tonightPlan.instructions)
+            ).replace(/→/g, '<b>&rarr;</b>')}
           </div>
           <div class="guide-subtext">
-            ${escapeHtml(tracker?.partner_name || 'Owner')} logged at ${formatTime(openCycle.before_sleep_at)}. Next session: ${escapeHtml(nextPlan.badge)}.
+            ${escapeHtml(tracker?.partner_name || 'Owner')} logged at ${formatTime(openCycle.before_sleep_at)}.${tracker?.has_titration_schedule !== false ? ` Next session: ${escapeHtml(nextPlan.badge)}.` : ''}
           </div>
         ` : `
           <div class="guide-badge-row">
-            <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : 'rest'}">
+            <span class="badge-pill ${tonightPlan.useAdapalene ? 'adapalene' : (tracker?.has_titration_schedule === false ? 'adapalene' : 'rest')}">
               Tonight: ${escapeHtml(tonightPlan.badge)}
             </span>
-            <span class="badge-pill phase">
-              ${escapeHtml(adapalenePhase.name)} (${adapalenePhase.count} nights)
-            </span>
+            ${adapalenePhase ? `
+              <span class="badge-pill phase">
+                ${escapeHtml(adapalenePhase.name)} (${adapalenePhase.count} nights)
+              </span>
+            ` : ''}
           </div>
           <div class="guide-steps" style="margin-top: 8px;">
             ${escapeHtml(tonightPlan.instructions).replace(/→/g, '<b>&rarr;</b>')}

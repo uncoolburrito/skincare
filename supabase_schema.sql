@@ -26,6 +26,11 @@ create table if not exists public.trackers (
   before_sleep_cue text default 'right before I get into bed',
   grace_log jsonb default '[]'::jsonb,
   last_partner_nudge_at timestamptz,
+  routine_config jsonb,
+  progress_gain_tau_days numeric default 60,
+  progress_decay_tau_days numeric default 58,
+  has_titration_schedule boolean default false,
+  titration_phase_thresholds jsonb default '[7, 21]'::jsonb,
   created_at timestamptz default now()
 );
 
@@ -35,7 +40,12 @@ alter table public.trackers
   add column if not exists before_sleep_cue text default 'right before I get into bed',
   add column if not exists grace_log jsonb default '[]'::jsonb,
   add column if not exists partner_alerted_cycle_id uuid,
-  add column if not exists last_partner_nudge_at timestamptz;
+  add column if not exists last_partner_nudge_at timestamptz,
+  add column if not exists routine_config jsonb,
+  add column if not exists progress_gain_tau_days numeric default 60,
+  add column if not exists progress_decay_tau_days numeric default 58,
+  add column if not exists has_titration_schedule boolean default false,
+  add column if not exists titration_phase_thresholds jsonb default '[7, 21]'::jsonb;
 
 -- Cycles table (sleep-cycle events: After Sleep and Before Sleep)
 create table if not exists public.cycles (
@@ -149,6 +159,11 @@ select
   t.grace_log,
   t.partner_alerted_cycle_id,
   t.last_partner_nudge_at,
+  t.routine_config,
+  t.progress_gain_tau_days,
+  t.progress_decay_tau_days,
+  t.has_titration_schedule,
+  t.titration_phase_thresholds,
   t.created_at,
   case
     when t.owner_id = auth.uid() then 'owner'

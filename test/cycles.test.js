@@ -619,6 +619,100 @@ assert.strictEqual(nudgeMsg4, 'Taylor thinks you might have forgotten your morni
 
 console.log('✓ Partner-Initiated Nudge & PWA Push Notification Engine verified.');
 
-console.log('=== All 10 Test Suites Passed Successfully! ===');
+// -----------------------------------------------------------------------------
+// 11. Parameterized Routines & Generic Titration Schedules (Phase 1)
+// -----------------------------------------------------------------------------
+console.log('Test 11: Parameterized Routines & Generic Titration Schedules...');
+
+// 11a. Generic Non-Titration Tracker
+const genericTracker = {
+  has_titration_schedule: false,
+  routine_config: {
+    afterSleep: {
+      title: 'Morning Routine',
+      steps: ['Splash Water', 'Vitamin C Serum', 'Moisturizer', 'SPF 50']
+    },
+    beforeSleep: {
+      title: 'Night Routine',
+      steps: ['Gentle Cleanser', 'Barrier Repair Cream'],
+      subtext: 'Hydrate and protect skin barrier.'
+    }
+  }
+};
+
+const nonTitrationCycles = [
+  { id: 'c1', after_sleep_at: 'T1', before_sleep_at: 'T2', adapalene: null }
+];
+
+// Phase should be null for non-titration
+assert.strictEqual(computeAdapalenePhase(nonTitrationCycles, genericTracker), null);
+
+// Before Sleep plan should be constant STANDARD
+const genericPlan = computeTonightPlan(nonTitrationCycles, genericTracker);
+assert.strictEqual(genericPlan.plan, 'STANDARD');
+assert.strictEqual(genericPlan.useAdapalene, false);
+assert.strictEqual(genericPlan.hasTitration, false);
+assert.strictEqual(genericPlan.instructions, 'Gentle Cleanser → Barrier Repair Cream');
+assert.strictEqual(genericPlan.title, 'Night Routine');
+
+// WhatsApp message for non-titration shouldn't mention adapalene or rest
+const genericMsg = formatWhatsAppMessage('beforeSleep', { before_sleep_at: '2026-09-19T22:00:00Z' }, 5, genericPlan, genericTracker);
+assert.ok(!genericMsg.toLowerCase().includes('adapalene'));
+assert.ok(!genericMsg.toLowerCase().includes('rest'));
+assert.ok(genericMsg.includes('Before Sleep skincare done'));
+
+// 11b. Custom Titration Product & Thresholds (e.g. Tretinoin [14, 42])
+const tretinoinTracker = {
+  has_titration_schedule: true,
+  titration_phase_thresholds: [14, 42],
+  routine_config: {
+    beforeSleep: {
+      titration: {
+        productName: 'Tretinoin 0.025%',
+        productShort: 'Tretinoin',
+        activeSteps: 'Wash → Tretinoin 0.025% → CeraVe',
+        restSteps: 'Wash → Hyaluronic Acid → CeraVe',
+        phaseNames: ['Acclimation', 'Nightly Build', 'Long-term Maintenance']
+      }
+    }
+  }
+};
+
+// 5 active applications: Acclimation phase (< 14)
+const tretCycles = Array.from({ length: 5 }, (_, i) => ({
+  id: `tr_${i}`,
+  after_sleep_at: `2026-09-${i + 1}T08:00:00Z`,
+  before_sleep_at: `2026-09-${i + 1}T22:00:00Z`,
+  adapalene: true
+}));
+
+const tretPhase = computeAdapalenePhase(tretCycles, tretinoinTracker);
+assert.strictEqual(tretPhase.key, 'build-up');
+assert.strictEqual(tretPhase.name, 'Acclimation');
+assert.strictEqual(tretPhase.target, 14);
+assert.ok(tretPhase.label.includes('tretinoin nights'));
+
+// After active night, next night is REST
+const tretPlan = computeTonightPlan(tretCycles, tretinoinTracker);
+assert.strictEqual(tretPlan.plan, 'REST');
+assert.strictEqual(tretPlan.useAdapalene, false);
+assert.strictEqual(tretPlan.instructions, 'Wash → Hyaluronic Acid → CeraVe');
+
+// 11c. Custom Tau Scaling on Progress Score
+const fastGainTracker = { progress_gain_tau_days: 30, progress_decay_tau_days: 30 };
+const normalTracker = { progress_gain_tau_days: 60, progress_decay_tau_days: 58 };
+
+const twoCycles = [
+  { id: 'g1', after_sleep_at: '2026-09-01T08:00:00Z', before_sleep_at: '2026-09-01T22:00:00Z' },
+  { id: 'g2', after_sleep_at: '2026-09-02T08:00:00Z', before_sleep_at: '2026-09-02T22:00:00Z' }
+];
+
+const scoreFast = computeProgressScore(twoCycles, fastGainTracker).score;
+const scoreNormal = computeProgressScore(twoCycles, normalTracker).score;
+assert.ok(scoreFast > scoreNormal, 'Faster tauGain (30 days) should yield higher progress than normal tauGain (60 days)');
+
+console.log('✓ Parameterized Routines & Generic Titration Schedules verified.');
+
+console.log('=== All 11 Test Suites Passed Successfully! ===');
 
 

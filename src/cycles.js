@@ -62,76 +62,113 @@ export function getOpenCycle(cycles = []) {
 }
 
 /**
- * Computes the Adapalene Phase based strictly on actual logged adapalene count:
- * - count < 7:  build-up (alternate adapalene and rest)
- * - count < 21: building nightly (nightly adapalene; skip only on irritation)
- * - count >= 21: maintenance (nightly adapalene)
+/**
+ * Computes the Titration / Adapalene Phase based on logged active application count:
+ * Reads thresholds from tracker.titration_phase_thresholds (default [7, 21]).
+ * If has_titration_schedule is false, returns null.
  */
-export function computeAdapalenePhase(cycles = []) {
-  const adapaleneCount = cycles.filter(c => c.adapalene === true).length;
+export function computeAdapalenePhase(cycles = [], tracker = {}) {
+  if (tracker && tracker.has_titration_schedule === false) {
+    return null;
+  }
 
-  if (adapaleneCount < 7) {
+  const titration = tracker?.routine_config?.beforeSleep?.titration;
+  const prodShort = titration?.productShort || 'Adapalene';
+  const thresholds = Array.isArray(tracker?.titration_phase_thresholds) && tracker.titration_phase_thresholds.length >= 2
+    ? tracker.titration_phase_thresholds
+    : [7, 21];
+
+  const t1 = Number(thresholds[0]) || 7;
+  const t2 = Number(thresholds[1]) || 21;
+  const phaseNames = titration?.phaseNames || ['Build-up', 'Building Nightly', 'Maintenance'];
+
+  const adapaleneCount = (Array.isArray(cycles) ? cycles : []).filter(c => c.adapalene === true).length;
+
+  if (adapaleneCount < t1) {
     return {
       key: 'build-up',
-      name: 'Build-up',
+      name: phaseNames[0] || 'Build-up',
       count: adapaleneCount,
-      target: 7,
-      label: `Build-up phase (${adapaleneCount}/7 adapalene nights)`,
+      target: t1,
+      label: `${phaseNames[0] || 'Build-up'} phase (${adapaleneCount}/${t1} ${prodShort.toLowerCase()} nights)`,
       subtext: 'Every other night — alternating with restorative rest nights to build tolerance.'
     };
   }
 
-  if (adapaleneCount < 21) {
+  if (adapaleneCount < t2) {
     return {
       key: 'building-nightly',
-      name: 'Building Nightly',
+      name: phaseNames[1] || 'Building Nightly',
       count: adapaleneCount,
-      target: 21,
-      label: `Building nightly phase (${adapaleneCount}/21 adapalene nights)`,
+      target: t2,
+      label: `${phaseNames[1] || 'Building nightly'} phase (${adapaleneCount}/${t2} ${prodShort.toLowerCase()} nights)`,
       subtext: 'Nightly application. Skip only on visible irritation or barrier distress.'
     };
   }
 
   return {
     key: 'maintenance',
-    name: 'Maintenance',
+    name: phaseNames[2] || 'Maintenance',
     count: adapaleneCount,
     target: null,
-    label: `Maintenance phase (${adapaleneCount} adapalene nights)`,
+    label: `${phaseNames[2] || 'Maintenance'} phase (${adapaleneCount} ${prodShort.toLowerCase()} nights)`,
     subtext: 'Long-term maintenance routine. Applied nightly.'
   };
 }
 
 /**
- * Computes tonight's Adapalene plan live before "Before Sleep" is tapped:
- *
- * lastBeforeSleep = most recent PAST cycle with beforeSleepAt filled
- * if phase is building-nightly or maintenance: plan = ADAPALENE
- * elif lastBeforeSleep does not exist:         plan = ADAPALENE
- * elif lastBeforeSleep.adapalene === true:    plan = REST
- * else:                                       plan = ADAPALENE
- *
- * Cycles skipped entirely in between simply don't exist in this lookup!
+ * Computes tonight's routine plan live before "Before Sleep" is tapped.
+ * Reads product steps and titration parameters from tracker row.
+ * If has_titration_schedule is false, returns constant routine without alternation.
  */
-export function computeTonightPlan(cycles = []) {
-  const phase = computeAdapalenePhase(cycles);
+export function computeTonightPlan(cycles = [], tracker = {}) {
+  // If user has no titration product, return constant routine
+  if (tracker && tracker.has_titration_schedule === false) {
+    const routine = tracker?.routine_config?.beforeSleep;
+    const steps = Array.isArray(routine?.steps)
+      ? routine.steps.join(' → ')
+      : (routine?.instructions || 'Wash → Moisturizer');
 
-  // In nightly phases, plan is always Adapalene
-  if (phase.key === 'building-nightly' || phase.key === 'maintenance') {
+    return {
+      useAdapalene: false,
+      hasTitration: false,
+      plan: 'STANDARD',
+      phase: null,
+      title: routine?.title || 'Before Sleep Routine',
+      badge: 'Night Routine',
+      instructions: steps,
+      subtext: routine?.subtext || 'Consistent nightly routine.'
+    };
+  }
+
+  const phase = computeAdapalenePhase(cycles, tracker);
+  const titration = tracker?.routine_config?.beforeSleep?.titration;
+  const prodName = titration?.productName || 'Adapalene 0.1%';
+  const prodShort = titration?.productShort || 'Adapalene';
+  const activeSteps = titration?.activeSteps || `Wash → ${prodName} → Moisturizer`;
+  const restSteps = titration?.restSteps || 'Wash → Moisturizer only';
+  const activeTitle = `${prodShort} Night`;
+  const activeBadge = prodShort;
+
+  // In nightly phases, plan is always active application
+  if (phase && (phase.key === 'building-nightly' || phase.key === 'maintenance')) {
     return {
       useAdapalene: true,
+      hasTitration: true,
       plan: 'ADAPALENE',
       phase,
-      title: 'Adapalene Night',
-      badge: 'Adapalene',
-      instructions: 'Wash → Adapalene 0.1% → Moisturizer',
-      subtext: `${phase.name} phase. Nightly routine. (Skip only if skin feels irritated).`
+      title: activeTitle,
+      badge: activeBadge,
+      instructions: activeSteps,
+      subtext: titration?.activeSubtext
+        ? `${phase.name} phase. ${titration.activeSubtext}`
+        : `${phase.name} phase. Nightly routine. (Skip only if skin feels irritated).`
     };
   }
 
   // Build-up phase: alternate based on most recent logged beforeSleepAt
   let lastBeforeSleep = null;
-  for (let i = cycles.length - 1; i >= 0; i--) {
+  for (let i = (cycles || []).length - 1; i >= 0; i--) {
     const c = cycles[i];
     if (c.before_sleep_at) {
       lastBeforeSleep = c;
@@ -144,42 +181,57 @@ export function computeTonightPlan(cycles = []) {
 
   if (!lastBeforeSleep) {
     useAdapalene = true;
-    reason = 'First logged night — starting with Adapalene';
+    reason = `First logged night — starting with ${prodShort}`;
   } else if (lastBeforeSleep.adapalene === true) {
     useAdapalene = false;
-    reason = 'Last logged routine was Adapalene — scheduled rest tonight';
+    reason = `Last logged routine was ${prodShort} — scheduled rest tonight`;
   } else {
     useAdapalene = true;
-    reason = 'Last logged routine was Rest — back to Adapalene tonight';
+    reason = `Last logged routine was Rest — back to ${prodShort} tonight`;
   }
 
   if (useAdapalene) {
     return {
       useAdapalene: true,
+      hasTitration: true,
       plan: 'ADAPALENE',
       phase,
-      title: 'Adapalene Night',
-      badge: 'Adapalene',
-      instructions: 'Wash → Adapalene 0.1% → Moisturizer',
-      subtext: `${reason}. Thin layer over dry skin.`
+      title: activeTitle,
+      badge: activeBadge,
+      instructions: activeSteps,
+      subtext: titration?.activeSubtext
+        ? `${reason}. ${titration.activeSubtext}`
+        : `${reason}. Thin layer over dry skin.`
     };
   } else {
     return {
       useAdapalene: false,
+      hasTitration: true,
       plan: 'REST',
       phase,
       title: 'Rest Night',
       badge: 'Rest Night',
-      instructions: 'Wash → Moisturizer only',
-      subtext: `${reason}. Intentional barrier recovery night.`
+      instructions: restSteps,
+      subtext: titration?.restSubtext
+        ? `${reason}. ${titration.restSubtext}`
+        : `${reason}. Intentional barrier recovery night.`
     };
   }
 }
 
 /**
- * Constant routine guide for After Sleep
+ * Constant routine guide for After Sleep (reads from tracker row)
  */
-export function getAfterSleepGuide() {
+export function getAfterSleepGuide(tracker = {}) {
+  const routine = tracker?.routine_config?.afterSleep;
+  if (routine && Array.isArray(routine.steps) && routine.steps.length > 0) {
+    return {
+      title: routine.title || 'After Sleep Routine',
+      instructions: routine.steps.join(' → '),
+      subtext: routine.subtext || 'Consistent daily barrier defense & post-inflammatory care.'
+    };
+  }
+
   return {
     title: 'After Sleep Routine',
     instructions: 'Wash → Azelaic acid 10% → Moisturizer → Sunscreen',
@@ -458,7 +510,7 @@ export function buildCycleTimeline(cycles = [], maxDisplay = 60, shieldedIds = [
 /**
  * Formats WhatsApp message for one-tap check-in
  */
-export function formatWhatsAppMessage(type, cycle, streak, plan) {
+export function formatWhatsAppMessage(type, cycle, streak, plan, tracker = {}) {
   const streakTxt = `${streak} cycle${streak === 1 ? '' : 's'}`;
 
   if (type === 'afterSleep') {
@@ -468,7 +520,11 @@ export function formatWhatsAppMessage(type, cycle, streak, plan) {
 
   if (type === 'beforeSleep') {
     const timeStr = formatTime(cycle?.before_sleep_at) || 'just now';
-    const planTxt = cycle?.adapalene ? 'adapalene' : 'intentional rest';
+    if (tracker && tracker.has_titration_schedule === false) {
+      return `Before Sleep skincare done (${timeStr}). Streak: ${streakTxt}.`;
+    }
+    const prodShort = tracker?.routine_config?.beforeSleep?.titration?.productShort?.toLowerCase() || 'adapalene';
+    const planTxt = cycle?.adapalene ? prodShort : 'intentional rest';
     return `Before Sleep skincare done (${timeStr}, ${planTxt}). Streak: ${streakTxt}.`;
   }
 
@@ -610,14 +666,19 @@ export function renderProgressMotif(score) {
  * - FULL MISS (neither half filled or >= 1.5 days gap between same-type check-ins):
  *   P = P * decayFactor(elapsedDays)
  */
-export function computeProgressScore(cycles = []) {
+export function computeProgressScore(cycles = [], tracker = {}) {
+  const tauGain = Number(tracker?.progress_gain_tau_days || tracker?.tauGain) || TAU_GAIN;
+  const tauDecay = Number(tracker?.progress_decay_tau_days || tracker?.tauDecay) || TAU_DECAY;
+  const gGain = 1 - Math.exp(-1 / tauGain);
+  const decayFn = (days) => Math.exp(-days / tauDecay);
+
   if (!cycles || cycles.length === 0) {
     return {
       score: 0,
       roundedScore: 0,
       milestone: getProgressMilestone(0),
-      tauGain: TAU_GAIN,
-      tauDecay: TAU_DECAY
+      tauGain,
+      tauDecay
     };
   }
 
@@ -639,8 +700,8 @@ export function computeProgressScore(cycles = []) {
       score: 0,
       roundedScore: 0,
       milestone: getProgressMilestone(0),
-      tauGain: TAU_GAIN,
-      tauDecay: TAU_DECAY
+      tauGain,
+      tauDecay
     };
   }
 
@@ -660,7 +721,7 @@ export function computeProgressScore(cycles = []) {
 
     if (isExplicitMiss) {
       const elapsedDays = typeof c.elapsedDays === 'number' ? c.elapsedDays : 1;
-      P = P * decayFactor(elapsedDays);
+      P = P * decayFn(elapsedDays);
       prevTimestamp = null;
       prevType = null;
       continue;
@@ -679,7 +740,7 @@ export function computeProgressScore(cycles = []) {
         if (prevType === currType && elapsedDays >= 1.5) {
           const missedCycles = Math.round(elapsedDays) - 1;
           if (missedCycles > 0) {
-            P = P * decayFactor(missedCycles);
+            P = P * decayFn(missedCycles);
           }
         }
       }
@@ -687,10 +748,10 @@ export function computeProgressScore(cycles = []) {
 
     if (isCycleComplete(c)) {
       // COMPLETE: growth on compliance (whether Adapalene or intentional Rest)
-      P = P + G_GAIN * (100 - P);
+      P = P + gGain * (100 - P);
     } else {
       // PARTIAL: orphaned cycle with only one half filled
-      P = P + 0.5 * G_GAIN * (100 - P);
+      P = P + 0.5 * gGain * (100 - P);
     }
 
     prevTimestamp = currTimestamp;
@@ -704,8 +765,8 @@ export function computeProgressScore(cycles = []) {
     score: P,
     roundedScore: Math.round(P),
     milestone: getProgressMilestone(P),
-    tauGain: TAU_GAIN,
-    tauDecay: TAU_DECAY
+    tauGain,
+    tauDecay
   };
 }
 
