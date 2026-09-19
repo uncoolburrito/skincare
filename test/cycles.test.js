@@ -31,7 +31,7 @@ import {
   validateCalibrationPayload
 } from '../src/calibration.js';
 
-console.log('=== Running Skin Streak v3 Cycle Engine Tests ===');
+console.log('=== Running renasce Cycle Engine Tests ===');
 
 // -----------------------------------------------------------------------------
 // 1. Cycle-Filling Logic
@@ -731,7 +731,7 @@ const prompt = generateCalibrationPrompt({
 });
 
 assert.ok(typeof prompt === 'string' && prompt.length > 200);
-assert.ok(prompt.includes('Skin Streak'));
+assert.ok(prompt.includes('renasce'));
 assert.ok(prompt.includes('Post-inflammatory erythema'));
 assert.ok(prompt.includes('Azelaic acid 10%'));
 assert.ok(prompt.includes('Combination / Sensitive'));

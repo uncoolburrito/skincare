@@ -1,5 +1,5 @@
 /**
- * Skin Streak — Partner-Initiated "Did you forget?" Nudge Endpoint
+ * renasce — Partner-Initiated "Did you forget?" Nudge Endpoint
  * Verifies partner authorization, enforces hourly rate limit in Supabase,
  * and sends real FCM push notification to Owner's registered devices.
  */
@@ -63,7 +63,7 @@ export default async function handler(req, res) {
     // Prepare push message
     const partnerName = data.partner_name || 'Your partner';
     const pendingSlot = data.pending_slot || 'routine';
-    const pushTitle = 'Skin Streak ✨';
+    const pushTitle = 'renasce ✨';
     const pushBody = `${partnerName} thinks you might have forgotten your ${pendingSlot} routine.`;
 
     const pushResult = await sendPushNotification(data.fcm_tokens, {

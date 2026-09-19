@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Authentication & Invite Management
+ * renasce — Authentication & Invite Management
  * Uses Supabase Auth with passwordless email magic links.
  */
 

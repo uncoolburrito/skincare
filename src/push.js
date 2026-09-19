@@ -1,5 +1,5 @@
 /**
- * Skin Streak — PWA & Push Notification Controller
+ * renasce — PWA & Push Notification Controller
  * Manages Service Worker registration, Web Push / FCM device token acquisition,
  * and permissions management.
  */

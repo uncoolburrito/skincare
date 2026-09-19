@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Main Application Controller
+ * renasce — Main Application Controller
  * Handles Supabase magic-link auth flow, Owner vs Partner role rendering,
  * one-tap check-in with instant WhatsApp notification, adaptive adapalene guide,
  * 60-cycle timeline strip, and settings modal with in-app confirmations.
@@ -120,7 +120,7 @@ async function initApp() {
 
   window.addEventListener('appinstalled', () => {
     state.deferredInstallPrompt = null;
-    showToast('Skin Streak successfully installed!');
+    showToast('renasce successfully installed!');
     render();
   });
 
@@ -437,7 +437,7 @@ function render() {
       <div class="auth-wrap">
         <div class="auth-icon">🔒</div>
         <h2 class="auth-title">Access Revoked</h2>
-        <p class="auth-desc">Your partner access to this Skin Streak log has been removed by the owner.</p>
+        <p class="auth-desc">Your partner access to this renasce log has been removed by the owner.</p>
         <button class="btn-primary" id="btnSignOutRevoked" style="max-width: 200px; margin: 0 auto;">Sign Out</button>
       </div>
     `;
@@ -519,7 +519,7 @@ function renderAuthScreen() {
   APP.innerHTML = `
     <div class="auth-wrap">
       <div class="auth-icon">✨</div>
-      <h1 class="auth-title">Skin Streak</h1>
+      <h1 class="auth-title">renasce</h1>
       <p class="auth-desc">Shared two-person habit tracker for irregular sleep schedules.</p>
 
       ${isInvite ? `
@@ -675,7 +675,7 @@ function renderDashboard(storageState) {
     <header>
       <div class="header-top">
         <div class="header-brand">
-          <h1>Skin Streak</h1>
+          <h1>renasce</h1>
           <span class="role-badge ${isOwner ? 'owner' : 'partner'}">
             ${isOwner ? 'Owner' : 'Partner'}
           </span>
@@ -1322,7 +1322,7 @@ function renderSettingsModal(tracker, storageState) {
           ` : `
             <div class="pwa-install-banner" style="margin-top: 10px;">
               <div style="font-size: 12px; color: var(--ink);">
-                <strong>Install Skin Streak App</strong><br>
+                <strong>Install renasce App</strong><br>
                 <span style="font-size: 11px; color: var(--ink-soft);">Add to Android home screen for one-tap tracking.</span>
               </div>
               ${state.deferredInstallPrompt ? `
@@ -1780,12 +1780,12 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
           navigator.serviceWorker.controller.postMessage({
             type: 'SHOW_NOTIFICATION',
             payload: {
-              title: 'Skin Streak ✨',
+              title: 'renasce ✨',
               body: 'Push notifications are working on your Android device!'
             }
           });
         } else if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification('Skin Streak ✨', {
+          new Notification('renasce ✨', {
             body: 'Push notifications are working on your Android device!',
             icon: '/icons/icon-192.png'
           });
@@ -1803,7 +1803,7 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
         state.deferredInstallPrompt.prompt();
         const choice = await state.deferredInstallPrompt.userChoice;
         if (choice.outcome === 'accepted') {
-          showToast('Skin Streak installed!');
+          showToast('renasce installed!');
         }
         state.deferredInstallPrompt = null;
         render();
@@ -1833,7 +1833,7 @@ function attachDashboardListeners(isOwner, tracker, cycles) {
         });
 
         document.getElementById('btnShareInviteWhatsApp')?.addEventListener('click', () => {
-          const text = `Hey! Here's your invite link to be my accountability partner on Skin Streak: ${state.inviteLinkData.inviteUrl}`;
+          const text = `Hey! Here's your invite link to be my accountability partner on renasce: ${state.inviteLinkData.inviteUrl}`;
           openWhatsApp(tracker?.partner_phone, text);
         });
       }

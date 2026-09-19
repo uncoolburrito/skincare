@@ -1,9 +1,9 @@
 /**
- * Skin Streak — Server-side Push Notification Dispatcher
+ * renasce — Server-side Push Notification Dispatcher
  * Sends real push notifications to Android PWA / Chrome devices via FCM / Web Push.
  */
 
-export async function sendPushNotification(tokens = [], { title, body, icon = '/icons/icon-192.png', tag = 'skin-streak-nudge', data = { url: '/' } } = {}) {
+export async function sendPushNotification(tokens = [], { title, body, icon = '/icons/icon-192.png', tag = 'renasce-nudge', data = { url: '/' } } = {}) {
   const fcmTokens = Array.isArray(tokens) ? tokens.filter(Boolean) : (tokens ? [tokens] : []);
   if (fcmTokens.length === 0) {
     return { sent: 0, failed: 0, reason: 'no_tokens' };

@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Parameterization Equivalence Verification Script
+ * renasce — Parameterization Equivalence Verification Script
  *
  * Runs real cycle history and multi-phase cycle sequences through both:
  * 1. The OLD hardcoded logic (hardcoded Adapalene, tau 60/58, thresholds [7, 21])
@@ -170,7 +170,7 @@ function computeTonightPlan_old(cycles = []) {
 // -----------------------------------------------------------------------------
 export async function runVerification() {
   console.log('================================================================');
-  console.log('Skin Streak — Parameterization Equivalence Verification');
+  console.log('renasce — Parameterization Equivalence Verification');
   console.log('================================================================\n');
 
   // Import current codebase functions from src/cycles.js

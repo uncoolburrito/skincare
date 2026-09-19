@@ -71,7 +71,7 @@ serve(async (req) => {
           body: JSON.stringify({
             to: token,
             notification: {
-              title: "Skin Streak ✨",
+              title: "renasce ✨",
               body: `${partnerName} thinks you might have forgotten your ${pendingSlot} routine.`,
               icon: "/icons/icon-192.png",
             },

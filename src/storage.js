@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Storage & Supabase Sync Engine
+ * renasce — Storage & Supabase Sync Engine
  * Handles role discovery (Owner vs Partner), normalized cycles CRUD,
  * Realtime WebSocket subscriptions, and partner invite management.
  */

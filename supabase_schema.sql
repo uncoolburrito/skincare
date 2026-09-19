@@ -1,5 +1,5 @@
 -- ==============================================================================
--- Skin Streak v3 — Schema & Row Level Security Setup
+-- renasce — Schema & Row Level Security Setup
 -- ==============================================================================
 -- Run this script in your Supabase SQL Editor:
 -- https://supabase.com/dashboard/project/whekrgnecterjouoyxer/sql

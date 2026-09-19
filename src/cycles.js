@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Sleep-Cycle Habit Tracking & Adapalene Schedule Engine
+ * renasce — Sleep-Cycle Habit Tracking & Adaptive Routine Engine
  *
  * Irregular Sleep Schedule Architecture:
  * - Check-ins are explicitly tagged "After Sleep" or "Before Sleep"

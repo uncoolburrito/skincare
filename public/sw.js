@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — PWA Service Worker & Push Notification Handler
+ * renasce — PWA Service Worker & Push Notification Handler
  * Provides offline shell support, receives FCM / Web Push notifications,
  * and handles notification clicks to bring the app to focus.
  */
@@ -78,18 +78,18 @@ self.addEventListener('push', (event) => {
       payload = event.data.json();
     } catch (e) {
       payload = {
-        title: 'Skin Streak ✨',
+        title: 'renasce ✨',
         body: event.data.text()
       };
     }
   }
 
   // Handle FCM notification payload structure or flat payload
-  const title = payload.title || payload.notification?.title || 'Skin Streak ✨';
+  const title = payload.title || payload.notification?.title || 'renasce ✨';
   const body = payload.body || payload.notification?.body || 'Time for your skincare check-in!';
   const icon = payload.icon || payload.notification?.icon || '/icons/icon-192.png';
   const badge = payload.badge || '/icons/badge-96.png';
-  const tag = payload.tag || 'skin-streak-nudge';
+  const tag = payload.tag || 'renasce-nudge';
   const data = payload.data || { url: '/' };
 
   const options = {
@@ -113,12 +113,12 @@ self.addEventListener('push', (event) => {
 // Message event: Allow client to request showing a local test notification
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
-    const { title = 'Skin Streak ✨', body = 'Test notification' } = event.data.payload || {};
+    const { title = 'renasce ✨', body = 'Test notification' } = event.data.payload || {};
     self.registration.showNotification(title, {
       body,
       icon: '/icons/icon-192.png',
       badge: '/icons/badge-96.png',
-      tag: 'skin-streak-test',
+      tag: 'renasce-test',
       data: { url: '/' },
       vibrate: [100, 50, 100]
     });

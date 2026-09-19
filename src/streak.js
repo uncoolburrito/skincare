@@ -1,5 +1,5 @@
 /**
- * Skin Streak — Core Streak, Metrics & Routine Guidance Logic
+ * renasce — Core Streak, Metrics & Routine Guidance Logic
  */
 
 export function todayStr() {

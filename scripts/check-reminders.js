@@ -1,5 +1,5 @@
 /**
- * Skin Streak v3 — Automated Hourly Reminder Scheduled Job (Feature 8 / Stretch Goal)
+ * renasce — Automated Hourly Reminder Scheduled Job (Feature 8 / Stretch Goal)
  * Checks each tracker's open cycle; if a gap has exceeded nudgeThresholdHours,
  * sends one WhatsApp nudge via CallMeBot, tracking lastNudgedCycleId so it fires once per gap.
  */
@@ -110,7 +110,7 @@ export async function checkAndSendReminders() {
       if (elapsed >= thresholdMs) {
         gapExceeded = true;
         const hours = Math.floor(elapsedHours);
-        reminderText = `Skin Streak nudge ✨: It's been ${hours}h since the After Sleep check-in — Before Sleep routine is pending!`;
+        reminderText = `renasce nudge ✨: It's been ${hours}h since the After Sleep check-in — Before Sleep routine is pending!`;
       }
     } else if (openCycle.before_sleep_at && !openCycle.after_sleep_at) {
       const elapsed = now - new Date(openCycle.before_sleep_at).getTime();
@@ -123,7 +123,7 @@ export async function checkAndSendReminders() {
       if (elapsed >= thresholdMs) {
         gapExceeded = true;
         const hours = Math.floor(elapsedHours);
-        reminderText = `Skin Streak nudge 🌙: It's been ${hours}h since the Before Sleep check-in — After Sleep routine is pending!`;
+        reminderText = `renasce nudge 🌙: It's been ${hours}h since the Before Sleep check-in — After Sleep routine is pending!`;
       }
     }
 
@@ -142,7 +142,7 @@ export async function checkAndSendReminders() {
           if (tokens.length > 0) {
             console.log(`[Reminder] Dispatching push notification to ${tokens.length} device(s) for owner ${owner_id}...`);
             const pushRes = await sendPushNotification(tokens, {
-              title: 'Skin Streak Reminder ✨',
+              title: 'renasce Reminder ✨',
               body: reminderText,
               tag: `reminder-${openCycle.id}`,
               data: { url: '/', cycleId: openCycle.id }

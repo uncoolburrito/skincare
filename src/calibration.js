@@ -1,5 +1,5 @@
 /**
- * Skin Streak — AI Protocol Calibration & Validation Engine
+ * renasce — AI Protocol Calibration & Validation Engine
  * Generates prompt templates for external LLMs (zero runtime AI / zero keys required)
  * and validates the returned structured clinical JSON protocol.
  */
@@ -18,7 +18,7 @@ export function generateCalibrationPrompt({
   const cleanSensitive = sensitiveProduct.trim() || 'None';
   const cleanSkinType = skinType.trim() || 'Normal / Combination';
 
-  return `You are an expert cosmetic dermatologist and behavioral medicine specialist calibrating a digital skincare habit tracker named "Skin Streak".
+  return `You are an expert cosmetic dermatologist and behavioral medicine specialist calibrating a digital skincare habit tracker named "renasce" (https://renasce.vercel.app).
 
 The tracker operates on human circadian sleep cycles (After Sleep routine & Before Sleep routine) and calculates habit consistency via a biologically grounded Progress Score based on human epidermal turnover dynamics:
 - Asymptotic compliance growth: ΔP = (1 - e^(-1/tau_gain)) * (100 - P)

@@ -1,6 +1,10 @@
-# Skin Streak ✨ (v3)
+# renasce ✨
 
-> A private, shared skincare habit tracker tailored for irregular sleep schedules, featuring real authenticated roles (**Owner** and **Partner**), event-driven sleep-cycle logging, a biologically grounded Progress Score algorithm, an adaptive active titration engine, research-backed miss-prevention, and zero-runtime AI clinical protocol calibration.
+> **renasce**: from the Latin root of *Renaissance* (rebirth & renewal) — leaning into epidermal cellular turnover, stratum corneum desquamation, and daily circadian renewal.
+>
+> A private, shared habit tracker tailored for irregular sleep schedules, featuring real authenticated roles (**Owner** and **Partner**), event-driven sleep-cycle logging, a biologically grounded Progress Score algorithm, an adaptive active titration engine, research-backed miss-prevention, and zero-runtime AI clinical protocol calibration.
+>
+> **Live App**: [renasce.vercel.app](https://renasce.vercel.app)
 
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Supabase](https://img.shields.io/badge/Database-Supabase%20Postgres%20%26%20RLS-3ECF8E?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com/)
@@ -11,13 +15,13 @@
 
 ---
 
-## Why Skin Streak v3?
+## Why renasce?
 
 Traditional habit trackers make two fatal assumptions:
 1. **Clock-time rigidity**: Assuming a fixed 24-hour day where "morning" is 8 AM and "night" is 10 PM. For shift workers, creative freelancers, or anyone with an irregular circadian rhythm, calendar-day resets create false misses or quietly disrupt progressive retinoid build-up schedules.
 2. **Unguessable links without access control**: Sharing a raw open URL means anyone with the link can edit the log, and there is no private, secure way to store your accountability partner's contact info.
 
-**Skin Streak solves both with a clinically sound, role-authenticated architecture**:
+**renasce solves both with a clinically sound, role-authenticated architecture**:
 - **Event-Driven Check-Ins**: Logged as **"After Sleep"** and **"Before Sleep"** whenever life happens, never inferred from clock time.
 - **Two Real Authenticated Roles**:
   - **Owner**: Logs check-ins, customizes routines, manages partner invites, configures private notification settings.
@@ -29,7 +33,7 @@ Traditional habit trackers make two fatal assumptions:
 
 ## Core Algorithms & Scientific Engineering
 
-Beyond standard habit tracking, Skin Streak runs a suite of computational engines grounded in dermatological pharmacodynamics and behavioral psychology:
+Beyond standard habit tracking, renasce runs a suite of computational engines grounded in dermatological pharmacodynamics and behavioral psychology:
 
 ```mermaid
 graph LR
@@ -91,13 +95,13 @@ Engineered to intercept lapses before they occur, backed by behavioral science:
 ---
 
 ### 4. Zero-Runtime AI Protocol Calibration
-Skin Streak features an AI-assisted dermatologist calibration workflow requiring **zero API keys, zero external API costs, and zero runtime latency**:
+renasce features an AI-assisted dermatologist calibration workflow requiring **zero API keys, zero external API costs, and zero runtime latency**:
 
 ```mermaid
 sequenceDiagram
   autonumber
   actor User as Owner
-  participant App as Skin Streak Web App
+  participant App as renasce Web App
   participant LLM as External AI (ChatGPT / Claude / Gemini)
 
   User->>App: Fills clinical intake (Goals, Products list, Sensitive active)
@@ -132,26 +136,26 @@ sequenceDiagram
 
 ## Android Installation & Push Notifications Guide
 
-Skin Streak is engineered as a Progressive Web App (PWA) with native-grade Web Push and Firebase Cloud Messaging (FCM) integration. It delivers real lock-screen banners and phone buzzes on Android without requiring an app store download.
+renasce is engineered as a Progressive Web App (PWA) with native-grade Web Push and Firebase Cloud Messaging (FCM) integration. It delivers real lock-screen banners and phone buzzes on Android without requiring an app store download.
 
 ### 1. Install as an App on Android
-1. Open the web app in **Google Chrome** on your Android device (e.g. `https://skincare-eight-iota.vercel.app`).
-2. An in-app banner will appear at the top: **"Install Skin Streak on Android for a full-screen experience"** &rarr; tap **"Install App"**.
+1. Open the web app in **Google Chrome** on your Android device: **[renasce.vercel.app](https://renasce.vercel.app)**.
+2. An in-app banner will appear at the top: **"Install renasce on Android for a full-screen experience"** &rarr; tap **"Install App"**.
 3. *Alternative*: Tap Chrome's three-dot menu (**⋮**) in the top-right corner and select **"Add to Home screen"** or **"Install app"**.
-4. Skin Streak will now appear on your home screen and app drawer with a full-screen standalone frame (no browser URL bar or navigation buttons).
+4. renasce will now appear on your home screen and app drawer with a full-screen standalone frame (no browser URL bar or navigation buttons).
 
 ### 2. Enable Push Notifications
-1. Open Skin Streak from your home screen icon.
+1. Open renasce from your home screen icon.
 2. Tap the **Settings** gear icon (⚙️) in the top-right header.
 3. Scroll down to the **Push Notifications & Install** section.
 4. Tap **"Enable Push Notifications"**.
-5. When Chrome prompts: *"skincare-eight-iota.vercel.app wants to send you notifications"*, tap **Allow**.
+5. When Chrome prompts: *"renasce.vercel.app wants to send you notifications"*, tap **Allow**.
 6. The status pill will immediately switch to a green **Active** badge.
 
 ### 3. Verify Your Device Token
 - Tap the **"Test"** button in Settings.
 - You will immediately receive a system notification:  
-  `Skin Streak ✨ — Push notifications are working on your Android device!`
+  `renasce ✨ — Push notifications are working on your Android device!`
 - Tapping the notification opens the app directly to your routine.
 
 ### 4. How Push Notifications Fire in Practice
@@ -161,7 +165,7 @@ Skin Streak is engineered as a Progressive Web App (PWA) with native-grade Web P
 ### 5. Troubleshooting (Android)
 - **Permission was blocked**: If you previously tapped "Block", tap the padlock/tune icon on the left of Chrome's URL bar &rarr; **Permissions** &rarr; toggle **Notifications** on.
 - **Notifications delayed or silenced by OS**: Ensure Android's Battery Optimization or "Deep Sleep" isn't putting Chrome / PWA to sleep:
-  - Go to Android **Settings** &rarr; **Apps** &rarr; **Skin Streak** (or Chrome) &rarr; **Battery** &rarr; select **"Unrestricted"** or **"Optimized"**.
+  - Go to Android **Settings** &rarr; **Apps** &rarr; **renasce** (or Chrome) &rarr; **Battery** &rarr; select **"Unrestricted"** or **"Optimized"**.
   - Ensure Android's **Do Not Disturb** mode isn't muting alert banners.
 
 ---
@@ -222,7 +226,7 @@ The interface is designed to feel tactile, editorial, and calm—reminiscent of 
 
 ## Automated Testing & Verification
 
-Skin Streak maintains strict algorithmic correctness with **12 automated test suites** and a dedicated numerical equivalence verification harness:
+renasce maintains strict algorithmic correctness with **12 automated test suites** and a dedicated numerical equivalence verification harness:
 
 ```bash
 # Run all 12 test suites
