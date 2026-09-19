@@ -4,6 +4,9 @@
  * and permissions management.
  */
 
+// Default VAPID public key (uncompressed P-256 EC public key for Web Push)
+const DEFAULT_VAPID_PUBLIC_KEY = 'BKvq9lC_Ukx5azbd0iuBTL81BrWSx4oDiE3LsV2n3FHAZm2hOCtI0FIvrw0z2rB9MEES3v54A2kOYG6n6e99QgQ';
+
 // Helper: Convert base64 VAPID key to Uint8Array for PushManager
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -14,6 +17,21 @@ function urlBase64ToUint8Array(base64String) {
     outputArray[i] = rawData.charCodeAt(i);
   }
   return outputArray;
+}
+
+/**
+ * Extracts the push device token from a PushSubscription
+ */
+function getSubscriptionToken(sub) {
+  if (!sub) return null;
+  if (sub.endpoint) {
+    const parts = sub.endpoint.split('/');
+    const lastPart = parts[parts.length - 1];
+    if (lastPart && lastPart.length > 20) {
+      return lastPart;
+    }
+  }
+  return JSON.stringify(sub);
 }
 
 /**
@@ -69,30 +87,31 @@ export async function subscribeToPush(storageController) {
   let sub = await reg.pushManager.getSubscription();
 
   if (!sub) {
-    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || import.meta.env.VITE_FIREBASE_VAPID_KEY;
-    const options = { userVisibleOnly: true };
-
-    if (vapidKey) {
-      options.applicationServerKey = urlBase64ToUint8Array(vapidKey);
-    }
+    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || import.meta.env.VITE_FIREBASE_VAPID_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+    const options = {
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey)
+    };
 
     try {
       sub = await reg.pushManager.subscribe(options);
     } catch (subErr) {
-      console.warn('[Push] PushManager subscribe error:', subErr);
-      // If subscription failed without VAPID, attempt standard subscribe
-      if (vapidKey) {
+      console.warn('[Push] Primary subscribe error:', subErr);
+      // Fallback subscribe
+      try {
         sub = await reg.pushManager.subscribe({ userVisibleOnly: true });
-      } else {
+      } catch (fallbackErr) {
+        console.error('[Push] Fallback subscribe error:', fallbackErr);
         throw subErr;
       }
     }
   }
 
   if (sub && storageController) {
-    // Save serialized subscription or endpoint token in Supabase
-    const tokenStr = JSON.stringify(sub);
-    await storageController.savePushSubscription(tokenStr);
+    const tokenStr = getSubscriptionToken(sub);
+    if (tokenStr) {
+      await storageController.savePushSubscription(tokenStr);
+    }
   }
 
   return sub;
@@ -111,7 +130,10 @@ export async function syncExistingPushSubscription(storageController) {
     if (reg && reg.pushManager) {
       const sub = await reg.pushManager.getSubscription();
       if (sub && storageController) {
-        await storageController.savePushSubscription(JSON.stringify(sub));
+        const tokenStr = getSubscriptionToken(sub);
+        if (tokenStr) {
+          await storageController.savePushSubscription(tokenStr);
+        }
       }
     }
   } catch (err) {

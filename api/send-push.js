@@ -18,7 +18,17 @@ export async function sendPushNotification(tokens = [], { title, body, icon = '/
   let sent = 0;
   let failed = 0;
 
-  for (const token of fcmTokens) {
+  for (const rawToken of fcmTokens) {
+    let token = rawToken;
+    if (typeof rawToken === 'string' && rawToken.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(rawToken);
+        if (parsed.endpoint) {
+          token = parsed.endpoint.split('/').pop();
+        }
+      } catch (e) {}
+    }
+
     try {
       // Legacy FCM HTTP Protocol (works universally with FCM Web Push registration tokens)
       const res = await fetch('https://fcm.googleapis.com/fcm/send', {
